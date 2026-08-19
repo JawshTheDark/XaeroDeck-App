@@ -8,6 +8,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -606,16 +608,24 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ChatDialog(mono: FontFamily, onClose: () -> Unit) {
+        val prefs = getSharedPreferences("deck", MODE_PRIVATE)
         var input by remember { mutableStateOf("") }
+        var fontSize by remember { mutableStateOf(prefs.getFloat("chatFontSize", 14f)) }
         val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+        // pinch to shrink / spread to enlarge chat text
+        val zoomState = rememberTransformableState { zoom, _, _ ->
+            fontSize = (fontSize * zoom).coerceIn(9f, 30f)
+            prefs.edit().putFloat("chatFontSize", fontSize).apply()
+        }
         // pin to the newest line on open and whenever chat grows
         LaunchedEffect(chatLog.size) {
             if (chatLog.isNotEmpty()) listState.scrollToItem(chatLog.size - 1)
         }
         HudDialog(mono, "CHAT", onClose, wide = true, fillHeight = true) {
-            LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth()
+                .transformable(zoomState), state = listState) {
                 items(chatLog.toList()) { line ->
-                    Text(line, fontFamily = mono, fontSize = 13.sp, color = Hud.text,
+                    Text(line, fontFamily = mono, fontSize = fontSize.sp, color = Hud.text,
                         modifier = Modifier.padding(vertical = 2.dp))
                 }
             }
