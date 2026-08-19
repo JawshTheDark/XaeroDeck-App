@@ -62,8 +62,9 @@ class MeteorActivity : ComponentActivity() {
         Column(Modifier.fillMaxSize().background(Hud.bg).padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("‹ MAP", fontFamily = mono, fontSize = 14.sp, color = Hud.accent,
-                    modifier = Modifier.clickable { finish() }.padding(6.dp))
+                Text("‹ MAP", fontFamily = mono, fontSize = 17.sp, color = Hud.accent,
+                    modifier = Modifier.background(Hud.surface).border(1.dp, Hud.border)
+                        .clickable { finish() }.padding(horizontal = 16.dp, vertical = 12.dp))
                 Text("▚ METEOR CONTROL", fontFamily = mono, fontSize = 14.sp,
                     color = Hud.text, fontWeight = FontWeight.Bold)
                 TextField(value = filter, onValueChange = { filter = it },
@@ -84,13 +85,13 @@ class MeteorActivity : ComponentActivity() {
                 val cats = listOf("") + modules.map { it.category }.distinct().sorted()
                 for (c in cats) {
                     val sel = c == category
-                    Text(c.ifEmpty { "ALL" }.uppercase(), fontFamily = mono, fontSize = 12.sp,
+                    Text(c.ifEmpty { "ALL" }.uppercase(), fontFamily = mono, fontSize = 15.sp,
                         color = if (sel) Hud.onAccent else Hud.sub,
                         modifier = Modifier
                             .background(if (sel) Hud.accent else Hud.surface)
                             .border(1.dp, if (sel) Hud.accent else Hud.border)
                             .clickable { category = c }
-                            .padding(horizontal = 12.dp, vertical = 7.dp))
+                            .padding(horizontal = 18.dp, vertical = 12.dp))
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -137,8 +138,8 @@ class MeteorActivity : ComponentActivity() {
                         Text(m.description, fontFamily = mono, fontSize = 10.sp,
                             color = Hud.sub, maxLines = 1)
                     }
-                    Text(if (expanded) "▴" else "▾", fontFamily = mono, fontSize = 14.sp,
-                        color = Hud.sub, modifier = Modifier.padding(horizontal = 10.dp)
+                    Text(if (expanded) "▴" else "▾", fontFamily = mono, fontSize = 20.sp,
+                        color = Hud.sub, modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
                             .clickable {
                                 expanded = !expanded
                                 if (expanded && settings == null) lifecycleScope.launch {

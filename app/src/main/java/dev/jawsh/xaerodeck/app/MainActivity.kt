@@ -459,26 +459,26 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun DimChip(label: String, selected: Boolean, onClick: () -> Unit) {
-        Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+        Text(label, fontFamily = FontFamily.Monospace, fontSize = 16.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
             color = if (selected) Hud.onAccent else Hud.sub,
             modifier = Modifier
                 .background(if (selected) Hud.accent else Hud.surface)
                 .border(1.dp, if (selected) Hud.accent else Hud.border)
                 .clickable(onClick = onClick)
-                .padding(horizontal = 14.dp, vertical = 8.dp))
+                .padding(horizontal = 20.dp, vertical = 14.dp))
     }
 
     @Composable
     private fun HudButton(label: String, active: Boolean = false, big: Boolean = false, onClick: () -> Unit) {
         Text(label, fontFamily = FontFamily.Monospace,
-            fontSize = if (big) 20.sp else 14.sp,
+            fontSize = if (big) 26.sp else 17.sp,
             color = if (active) Hud.onAccent else Hud.accent,
             modifier = Modifier
                 .background(if (active) Hud.accent else Hud.surface)
                 .border(1.dp, if (active) Hud.accent else Hud.border)
                 .clickable(onClick = onClick)
-                .padding(horizontal = if (big) 16.dp else 12.dp, vertical = 8.dp))
+                .padding(horizontal = if (big) 24.dp else 18.dp, vertical = 14.dp))
     }
 
     @Composable
@@ -547,18 +547,23 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(4.dp))
             for (w in waypointsS.value.sortedBy { it.name.lowercase() }) {
                 Row(Modifier.fillMaxWidth()
+                    .background(Hud.surface)
+                    .border(1.dp, Hud.border)
                     .clickable {
                         if (navModeS.value) lifecycleScope.launch {
                             log(if (api.baritoneGoto(w.x, w.z)) "#GOTO ${w.name.uppercase()}" else "GOTO FAILED")
                         } else { map.follow = false; map.centerOn(w.x.toDouble(), w.z.toDouble()) }
                     }
-                    .padding(vertical = 5.dp)) {
-                    Text("◆ ${w.name}  ${w.x} ${w.z}", fontFamily = mono, fontSize = 12.sp,
+                    .padding(start = 10.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("◆ ${w.name}  ${w.x} ${w.z}", fontFamily = mono, fontSize = 15.sp,
                         color = Color(0xFF000000.toInt() or w.color),
-                        modifier = Modifier.weight(1f))
-                    Text("✕", fontFamily = mono, fontSize = 12.sp, color = Hud.sub,
-                        modifier = Modifier.clickable { panelDeleteRequest(w) }.padding(horizontal = 4.dp))
+                        modifier = Modifier.weight(1f).padding(vertical = 12.dp))
+                    Text("✕", fontFamily = mono, fontSize = 18.sp, color = Hud.sub,
+                        modifier = Modifier.clickable { panelDeleteRequest(w) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp))
                 }
+                Spacer(Modifier.height(4.dp))
             }
         }
     }
