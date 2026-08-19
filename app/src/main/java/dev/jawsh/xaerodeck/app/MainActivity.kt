@@ -581,13 +581,17 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun HudDialog(mono: FontFamily, title: String, onClose: () -> Unit,
+                          wide: Boolean = false, fillHeight: Boolean = false,
                           content: @Composable ColumnScope.() -> Unit) {
-        Dialog(onDismissRequest = onClose) {
+        Dialog(onDismissRequest = onClose,
+            properties = androidx.compose.ui.window.DialogProperties(
+                usePlatformDefaultWidth = !wide)) {
             Column(Modifier
+                .let { if (wide) it.fillMaxWidth(0.8f) else it.widthIn(min = 340.dp, max = 560.dp) }
+                .let { if (fillHeight) it.fillMaxHeight(0.85f) else it }
                 .background(Hud.panel)
                 .border(1.dp, Hud.accent)
-                .padding(16.dp)
-                .widthIn(min = 320.dp, max = 560.dp)) {
+                .padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("▚ $title", fontFamily = mono, fontSize = 13.sp, color = Hud.accent)
                     Text("✕", fontFamily = mono, fontSize = 13.sp, color = Hud.sub,
@@ -602,11 +606,16 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun ChatDialog(mono: FontFamily, onClose: () -> Unit) {
         var input by remember { mutableStateOf("") }
-        HudDialog(mono, "CHAT", onClose) {
-            LazyColumn(Modifier.height(340.dp).fillMaxWidth(), reverseLayout = false) {
+        val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+        // pin to the newest line on open and whenever chat grows
+        LaunchedEffect(chatLog.size) {
+            if (chatLog.isNotEmpty()) listState.scrollToItem(chatLog.size - 1)
+        }
+        HudDialog(mono, "CHAT", onClose, wide = true, fillHeight = true) {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
                 items(chatLog.toList()) { line ->
-                    Text(line, fontFamily = mono, fontSize = 12.sp, color = Hud.text,
-                        modifier = Modifier.padding(vertical = 1.dp))
+                    Text(line, fontFamily = mono, fontSize = 13.sp, color = Hud.text,
+                        modifier = Modifier.padding(vertical = 2.dp))
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -670,8 +679,8 @@ class MainActivity : ComponentActivity() {
         var addr by remember { mutableStateOf(prefs.getString("addr", "") ?: "") }
         var token by remember { mutableStateOf(prefs.getString("token", "") ?: "") }
         var showWorlds by remember { mutableStateOf(false) }
-        HudDialog(mono, "CONFIG", onClose) {
-            Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 480.dp)) {
+        HudDialog(mono, "CONFIG", onClose, wide = true, fillHeight = true) {
+            Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
                 HudTextField(mono, addr, { addr = it }, "PC IP (EMPTY = AUTO-DISCOVER)", ImeAction.Done) {
                     prefs.edit().putString("addr", addr.trim()).apply()
                     applyAddress(addr.trim()); map.clearTiles(); restartStream()
@@ -691,16 +700,16 @@ class MainActivity : ComponentActivity() {
                     if (it) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    HudButton("CLEAR TRAIL") { map.trail.clear(); trailFile()?.delete(); map.invalidate() }
-                    HudButton("CLEAR TILES") {
-                        api.worldCacheDir()?.deleteRecursively(); api.worldCacheDir()?.mkdirs()
-                        map.clearTiles(); log("TILE CACHE CLEARED")
-                    }
+                Spacer(Modifier.height(12.dp))
+                WideButton(mono, "CLEAR TRAIL") { map.trail.clear(); trailFile()?.delete(); map.invalidate() }
+                Spacer(Modifier.height(6.dp))
+                WideButton(mono, "CLEAR TILE CACHE") {
+                    api.worldCacheDir()?.deleteRecursively(); api.worldCacheDir()?.mkdirs()
+                    map.clearTiles(); log("TILE CACHE CLEARED")
                 }
                 Spacer(Modifier.height(6.dp))
-                HudButton("BROWSE CACHED WORLDS") { showWorlds = true }
+                WideButton(mono, "BROWSE CACHED WORLDS") { showWorlds = true }
+                Spacer(Modifier.height(6.dp))
             }
         }
         if (showWorlds) {
@@ -727,6 +736,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    @Composable
+    private fun WideButton(mono: FontFamily, label: String, onClick: () -> Unit) {
+        Text(label, fontFamily = mono, fontSize = 13.sp, color = Hud.accent,
+            modifier = Modifier.fillMaxWidth()
+                .background(Hud.surface).border(1.dp, Hud.border)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 12.dp))
     }
 
     @Composable
