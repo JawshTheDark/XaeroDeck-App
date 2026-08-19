@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:baselineAligned="false">
+
+    <FrameLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="3">
+
+        <dev.jawsh.xaerodeck.app.MapView
+            android:id="@+id/map"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/zoomInBtn"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:layout_marginBottom="10dp"
+                android:background="#B0202430"
+                android:gravity="center"
+                android:textColor="#FFFFFF"
+                android:textSize="26sp"
+                android:text="＋" />
+
+            <TextView
+                android:id="@+id/zoomOutBtn"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="#B0202430"
+                android:gravity="center"
+                android:textColor="#FFFFFF"
+                android:textSize="26sp"
+                android:text="－" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/followBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_margin="16dp"
+            android:background="#B0202430"
+            android:padding="12dp"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:text="◉ Following" />
+
+        <HorizontalScrollView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:layout_margin="12dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/dimChips"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <LinearLayout
+            android:id="@+id/notifOverlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="70dp"
+            android:orientation="vertical"
+            android:gravity="center_horizontal" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_margin="12dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/navBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:background="#B0202430"
+                android:padding="12dp"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:text="⏩" />
+
+            <TextView
+                android:id="@+id/chatBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:background="#B0202430"
+                android:padding="12dp"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:text="💬" />
+
+            <TextView
+                android:id="@+id/meteorBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:background="#B0202430"
+                android:padding="12dp"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:text="☄" />
+
+            <TextView
+                android:id="@+id/settingsBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:background="#B0202430"
+                android:padding="12dp"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:text="⚙" />
+
+            <TextView
+                android:id="@+id/panelToggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="#B0202430"
+                android:padding="12dp"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:text="☰" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/sidePanel"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:background="#161A20"
+        android:padding="12dp">
+
+        <EditText
+            android:id="@+id/addressEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="PC IP (e.g. 192.168.1.20)"
+            android:imeOptions="actionDone"
+            android:inputType="textUri"
+            android:singleLine="true"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#8899AA" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:textColor="#CCDDEE"
+            android:textSize="14sp"
+            android:fontFamily="monospace"
+            android:text="…" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="6dp"
+            android:text="Waypoints — tap to jump, long-press map to add"
+            android:textColor="#8899AA"
+            android:textSize="12sp" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <LinearLayout
+                android:id="@+id/waypointList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+    </LinearLayout>
+</LinearLayout>
