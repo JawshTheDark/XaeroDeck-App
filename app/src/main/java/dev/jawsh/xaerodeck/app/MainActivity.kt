@@ -1,14 +1,38 @@
 package dev.jawsh.xaerodeck.app
 
+import android.content.Intent
 import android.os.Bundle
-import android.text.InputType
-import android.view.View
 import android.view.WindowManager
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.TextView
-import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,138 +41,231 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
     private lateinit var api: DeckApi
     private lateinit var map: MapView
-    private lateinit var statusText: TextView
-    private lateinit var waypointList: LinearLayout
-    private lateinit var followBtn: TextView
-    private lateinit var dimChips: LinearLayout
-    private lateinit var sidePanel: View
     private var streamJob: Job? = null
-    private var slowJob: Job? = null
     private val tileSemaphore = Semaphore(6)
     private val pendingTiles = HashSet<String>()
 
-    /** Dimension shown on the map ("" = whatever the player is in). */
     private var viewedDim = ""
     private var playerDim: String? = null
     private var lastStatus: Status? = null
-    private var navMode = false
-    private val chatLog = ArrayList<CharSequence>()
-    private var chatDialogList: LinearLayout? = null
     private var lastTrailX = Double.NaN
     private var lastTrailZ = 0.0
+    private val seenNotifs = HashSet<Long>()
+
+    // Compose-observed state
+    private val statusS = mutableStateOf<Status?>(null)
+    private val connectedS = mutableStateOf(false)
+    private val waypointsS = mutableStateOf<List<DeckWaypoint>>(emptyList())
+    private val dimsS = mutableStateOf<List<DeckApi.Dimension>>(emptyList())
+    private val followS = mutableStateOf(true)
+    private val navModeS = mutableStateOf(false)
+    private val panelS = mutableStateOf(true)
+    private val logS = mutableStateOf("")
+    private val autoAddrS = mutableStateOf("")
+    private val browsingS = mutableStateOf<String?>(null)
+    private val toasts = mutableStateListOf<Pair<Long, AnnotatedString>>()
+    private val chatLog = mutableStateListOf<AnnotatedString>()
+    private var toastId = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         api = DeckApi(filesDir)
-        map = findViewById(R.id.map)
-        statusText = findViewById(R.id.statusText)
-        waypointList = findViewById(R.id.waypointList)
-        followBtn = findViewById(R.id.followBtn)
-        dimChips = findViewById(R.id.dimChips)
-        sidePanel = findViewById(R.id.sidePanel)
-        val addressEdit = findViewById<EditText>(R.id.addressEdit)
-        val panelToggle = findViewById<TextView>(R.id.panelToggle)
-
+        map = MapView(this)
         val prefs = getSharedPreferences("deck", MODE_PRIVATE)
-        addressEdit.setText(prefs.getString("addr", "") ?: "")
-        applyAddress(addressEdit.text.toString())
+        applyAddress(prefs.getString("addr", "") ?: "")
         api.currentWorldKey = prefs.getString("worldKey", "unknown") ?: "unknown"
-
-        addressEdit.setOnEditorActionListener { v, _, _ ->
-            prefs.edit().putString("addr", v.text.toString().trim()).apply()
-            applyAddress(v.text.toString().trim())
-            map.clearTiles()
-            restartStream()
-            false
+        api.token = prefs.getString("token", "") ?: ""
+        map.showPlayers = prefs.getBoolean("showPlayers", true)
+        map.showHostiles = prefs.getBoolean("showHostiles", true)
+        map.showGrid = prefs.getBoolean("showGrid", false)
+        map.showTrail = prefs.getBoolean("showTrail", true)
+        if (prefs.getBoolean("keepAwake", true)) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
-
-        panelToggle.setOnClickListener {
-            sidePanel.visibility = if (sidePanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-        }
-
-        followBtn.setOnClickListener {
-            map.follow = !map.follow
-            if (map.follow && viewedDim.isNotEmpty()) switchDim("") // follow implies player's dim
-            map.player?.let { if (map.follow) map.centerOn(it.x, it.z) }
-        }
-        map.onFollowChanged = { updateFollowBtn() }
-        updateFollowBtn()
-
+        map.onFollowChanged = { followS.value = it }
         map.tileRequester = { rx, rz -> requestTile(rx, rz, false) }
-        map.onLongPressBlock = { x, z -> promptWaypoint(x, z) }
-
-        // zoom about the screen center — which is the player while following
-        findViewById<TextView>(R.id.zoomInBtn).setOnClickListener {
-            map.scale = (map.scale * 1.5f).coerceIn(0.05f, 16f)
-            map.invalidate()
-        }
-        findViewById<TextView>(R.id.zoomOutBtn).setOnClickListener {
-            map.scale = (map.scale / 1.5f).coerceIn(0.05f, 16f)
-            map.invalidate()
-        }
-
-        findViewById<TextView>(R.id.chatBtn).setOnClickListener { showChat() }
-        val navBtn = findViewById<TextView>(R.id.navBtn)
-        navBtn.setOnClickListener {
-            navMode = !navMode
-            navBtn.setBackgroundColor(if (navMode) 0xD04488CC.toInt() else 0xB0202430.toInt())
-            statusText.append(if (navMode) "\nNav mode: tap map to Baritone #goto" else "\nNav mode off")
-        }
-        navBtn.setOnLongClickListener {
-            lifecycleScope.launch {
-                api.baritoneCancel()
-                statusText.append("\n#cancel sent")
-            }
-            true
-        }
-        map.onTapBlock = { x, z ->
-            if (navMode) {
-                // snap to a waypoint marker if the tap landed on/near one
-                val snapRadius = 28f / map.scale
-                val target = map.waypoints.minByOrNull {
-                    val dx = it.x - x.toDouble()
-                    val dz = it.z - z.toDouble()
-                    dx * dx + dz * dz
-                }?.takeIf {
-                    Math.abs(it.x - x) <= snapRadius && Math.abs(it.z - z) <= snapRadius
-                }
-                val gx = target?.x ?: x
-                val gz = target?.z ?: z
-                lifecycleScope.launch {
-                    val ok = api.baritoneGoto(gx, gz)
-                    statusText.append(when {
-                        !ok -> "\nBaritone goto failed (remote-control on? token?)"
-                        target != null -> "\n#goto → ${target.name} (${gx}, ${gz})"
-                        else -> "\n#goto $gx $gz"
-                    })
-                }
-            }
-        }
-
-        findViewById<TextView>(R.id.settingsBtn).setOnClickListener { showSettings() }
-        findViewById<TextView>(R.id.meteorBtn).setOnClickListener { showMeteorPanel() }
-        applyViewPrefs()
-
         map.waypoints = api.cachedWaypoints()
+        waypointsS.value = map.waypoints
+        loadTrail()
+
+        setContent { HudScreen() }
         restartStream()
         startSlowLoop()
-        startDiscovery(addressEdit)
+        startDiscovery()
     }
 
-    /** Listen for the mod's UDP beacon; auto-connect when no address is typed. */
-    private fun startDiscovery(addressEdit: EditText) {
+    // ---------- networking / logic (unchanged behavior) ----------
+
+    private fun applyAddress(addr: String) {
+        api.baseUrl = when {
+            addr.isEmpty() -> api.baseUrl
+            addr.startsWith("http") -> addr.trimEnd('/')
+            else -> "http://$addr:8399"
+        }
+    }
+
+    private fun log(msg: String) {
+        logS.value = msg
+    }
+
+    private fun requestTile(rx: Int, rz: Int, force: Boolean, overview: Boolean = map.usingOverview()) {
+        val key = "${viewedDim}_${if (overview) "ov" else "t"}_${rx}_$rz"
+        val dim = viewedDim
+        synchronized(pendingTiles) { if (!pendingTiles.add(key)) return }
+        lifecycleScope.launch(Dispatchers.IO) {
+            tileSemaphore.withPermit {
+                val bmp = api.tile(dim, rx, rz, force, overview)
+                if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, bmp, overview) }
+            }
+            synchronized(pendingTiles) { pendingTiles.remove(key) }
+        }
+    }
+
+    private fun switchDim(dim: String) {
+        if (dim == viewedDim) return
+        viewedDim = dim
+        browsingS.value = null
+        updateWorldKey()
+        map.clearTiles()
+        synchronized(pendingTiles) { pendingTiles.clear() }
+        map.waypoints = if (effectiveViewedDim() == playerDim) api.cachedWaypoints() else emptyList()
+        waypointsS.value = map.waypoints
+        loadTrail()
+    }
+
+    private fun effectiveViewedDim(): String? =
+        if (viewedDim.isEmpty()) playerDim
+        else "minecraft:$viewedDim".takeIf { !viewedDim.contains(":") } ?: viewedDim
+
+    private fun updateWorldKey() {
+        val st = lastStatus ?: return
+        if (browsingS.value != null) return
+        val dimForCache = if (viewedDim.isEmpty()) st.dimension else viewedDim
+        val key = "${st.worldId}_$dimForCache"
+        if (key != api.currentWorldKey) {
+            api.currentWorldKey = key
+            getSharedPreferences("deck", MODE_PRIVATE).edit().putString("worldKey", key).apply()
+        }
+    }
+
+    private fun onStatus(st: Status?) {
+        runOnUiThread {
+            statusS.value = st
+            connectedS.value = st != null
+            if (st != null && st.inGame && st.player != null) {
+                val dimChanged = playerDim != null && playerDim != st.dimension
+                playerDim = st.dimension
+                lastStatus = st
+                if (dimChanged && viewedDim.isEmpty()) {
+                    map.clearTiles()
+                    synchronized(pendingTiles) { pendingTiles.clear() }
+                    saveTrail(); loadTrail()
+                }
+                updateWorldKey()
+                for (n in st.notifications) showNotification(n)
+                for (c in st.chat) {
+                    chatLog.add(if (c.spans.isNotEmpty()) c.spans.toAnnotated() else AnnotatedString(c.text))
+                    if (chatLog.size > 200) chatLog.removeAt(0)
+                }
+                for (d in st.dirty) {
+                    val dimMatch = if (viewedDim.isEmpty())
+                        st.dimension?.endsWith(d.dim) == true else viewedDim == d.dim
+                    if (dimMatch) {
+                        map.tileChanged(d.x, d.z)
+                        if (map.usingOverview())
+                            requestTile(Math.floorDiv(d.x, 4), Math.floorDiv(d.z, 4), true, true)
+                        else requestTile(d.x, d.z, true, false)
+                    }
+                }
+                val p = st.player
+                if (lastTrailX.isNaN() || Math.abs(p.x - lastTrailX) + Math.abs(p.z - lastTrailZ) >= 8) {
+                    lastTrailX = p.x; lastTrailZ = p.z
+                    map.trail.add(doubleArrayOf(p.x, p.z))
+                    if (map.trail.size > 5000) map.trail.removeAt(0)
+                }
+                val viewingPlayerDim = viewedDim.isEmpty() || effectiveViewedDim() == st.dimension
+                map.player = if (viewingPlayerDim) st.player else null
+                map.entities = if (viewingPlayerDim) st.entities else emptyList()
+            } else {
+                map.player = null
+            }
+            map.invalidate()
+        }
+    }
+
+    private fun showNotification(n: DeckNotification) {
+        if (!seenNotifs.add(n.id)) return
+        if (seenNotifs.size > 400) { seenNotifs.clear(); seenNotifs.add(n.id) }
+        if (n.text.startsWith("💀")) {
+            val vib = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+            vib.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 300, 150, 300), -1))
+        }
+        if (!getSharedPreferences("deck", MODE_PRIVATE).getBoolean("showNotifs", true)) return
+        val text = if (n.spans.isNotEmpty()) n.spans.toAnnotated() else AnnotatedString(n.text)
+        val id = toastId++
+        toasts.add(id to text)
+        while (toasts.size > 4) toasts.removeAt(0)
+        lifecycleScope.launch {
+            delay(5000)
+            toasts.removeAll { it.first == id }
+        }
+    }
+
+    private fun restartStream() {
+        streamJob?.cancel()
+        if (api.baseUrl.isEmpty()) return
+        streamJob = lifecycleScope.launch(Dispatchers.IO) {
+            while (true) {
+                try {
+                    api.streamBlocking { st -> onStatus(st) }
+                } catch (e: Exception) {
+                    var polled = false
+                    repeat(5) {
+                        val st = api.status()
+                        if (st != null) polled = true
+                        onStatus(st)
+                        delay(1000)
+                    }
+                    if (!polled) onStatus(null)
+                }
+                delay(1000)
+            }
+        }
+    }
+
+    private fun startSlowLoop() {
+        lifecycleScope.launch {
+            var tick = 0
+            while (true) {
+                if (api.baseUrl.isNotEmpty() && lastStatus?.inGame == true && browsingS.value == null) {
+                    if (tick % 10 == 0) refreshWaypoints()
+                    if (tick % 15 == 0) dimsS.value = api.dimensions()
+                    if (tick % 3 == 0) map.retryMissing()
+                    if (tick % 2 == 0 && viewedDim.isEmpty()) {
+                        map.player?.let { p ->
+                            val prx = Math.floorDiv(p.x.toInt(), 512)
+                            val prz = Math.floorDiv(p.z.toInt(), 512)
+                            for (dx in -1..1) for (dz in -1..1) requestTile(prx + dx, prz + dz, true, false)
+                        }
+                    }
+                    if (tick % 5 == 1) for ((rx, rz) in map.visibleRegions()) requestTile(rx, rz, true)
+                }
+                tick++
+                delay(1000)
+            }
+        }
+    }
+
+    private fun startDiscovery() {
         lifecycleScope.launch(Dispatchers.IO) {
             val wifi = applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager
             val lock = wifi.createMulticastLock("xaerodeck").apply { setReferenceCounted(false) }
             while (true) {
-                val manualAddr = getSharedPreferences("deck", MODE_PRIVATE)
-                    .getString("addr", "")?.trim() ?: ""
-                if (manualAddr.isEmpty()) {
+                val manual = getSharedPreferences("deck", MODE_PRIVATE).getString("addr", "")?.trim() ?: ""
+                if (manual.isEmpty()) {
                     try {
                         lock.acquire()
                         java.net.DatagramSocket(null).use { socket ->
@@ -164,16 +281,12 @@ class MainActivity : AppCompatActivity() {
                                 val url = "http://${packet.address.hostAddress}:$port"
                                 if (api.baseUrl != url) {
                                     api.baseUrl = url
-                                    runOnUiThread {
-                                        addressEdit.hint = "auto: ${packet.address.hostAddress}"
-                                        statusText.append("\nFound PC at ${packet.address.hostAddress}")
-                                    }
+                                    autoAddrS.value = packet.address.hostAddress ?: ""
                                     restartStream()
                                 }
                             }
                         }
                     } catch (e: Exception) {
-                        // no beacon heard this cycle — keep listening
                     } finally {
                         try { lock.release() } catch (e: Exception) {}
                     }
@@ -183,502 +296,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun applyAddress(addr: String) {
-        api.baseUrl = when {
-            addr.isEmpty() -> api.baseUrl // keep auto-discovered address
-            addr.startsWith("http") -> addr.trimEnd('/')
-            else -> "http://$addr:8399"
-        }
-    }
-
-    private fun updateFollowBtn() {
-        followBtn.text = if (map.follow) "◉ Following" else "○ Free look"
-    }
-
-    private fun requestTile(rx: Int, rz: Int, force: Boolean, overview: Boolean = map.usingOverview()) {
-        val key = "${viewedDim}_${if (overview) "ov" else "t"}_${rx}_$rz"
-        val dim = viewedDim
-        synchronized(pendingTiles) {
-            if (!pendingTiles.add(key)) return
-        }
-        lifecycleScope.launch(Dispatchers.IO) {
-            tileSemaphore.withPermit {
-                val bmp = api.tile(dim, rx, rz, force, overview)
-                if (dim == viewedDim) {
-                    launch(Dispatchers.Main) { map.putTile(rx, rz, bmp, overview) }
-                }
-            }
-            synchronized(pendingTiles) { pendingTiles.remove(key) }
-        }
-    }
-
-    private fun switchDim(dim: String) {
-        if (dim == viewedDim) return
-        viewedDim = dim
-        updateWorldKey()
-        map.clearTiles()
-        synchronized(pendingTiles) { pendingTiles.clear() }
-        renderDimChips(lastDims)
-        // waypoints only make sense in the dimension they belong to
-        map.waypoints = if (effectiveViewedDim() == playerDim) api.cachedWaypoints() else emptyList()
-    }
-
-    private fun effectiveViewedDim(): String? =
-        if (viewedDim.isEmpty()) playerDim else "minecraft:$viewedDim".takeIf { !viewedDim.contains(":") } ?: viewedDim
-
-    private var lastDims: List<DeckApi.Dimension> = emptyList()
-
-    private fun renderDimChips(dims: List<DeckApi.Dimension>) {
-        lastDims = dims
-        dimChips.removeAllViews()
-        if (dims.isEmpty()) return
-        val options = listOf(DeckApi.Dimension("", "live", false)) + dims
-        for (d in options) {
-            val chip = TextView(this)
-            val selected = d.key == "live" && viewedDim.isEmpty() || d.key == viewedDim
-            chip.text = when (d.key) {
-                "live" -> "LIVE"
-                "overworld" -> "Overworld"
-                "the_nether" -> "Nether"
-                "the_end" -> "End"
-                else -> d.key
-            }
-            chip.setPadding(26, 14, 26, 14)
-            chip.textSize = 14f
-            chip.setTextColor(if (selected) 0xFF102030.toInt() else 0xFFCCDDEE.toInt())
-            chip.setBackgroundColor(if (selected) 0xFF7FB8E8.toInt() else 0xB0202430.toInt())
-            chip.setOnClickListener {
-                if (d.key != "live") map.follow = false
-                switchDim(if (d.key == "live") "" else d.key)
-            }
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.marginEnd = 12
-            dimChips.addView(chip, lp)
-        }
-    }
-
-    private fun updateWorldKey() {
-        val st = lastStatus ?: return
-        val dimForCache = if (viewedDim.isEmpty()) st.dimension else viewedDim
-        val key = "${st.worldId}_$dimForCache"
-        if (key != api.currentWorldKey) {
-            api.currentWorldKey = key
-            getSharedPreferences("deck", MODE_PRIVATE).edit().putString("worldKey", key).apply()
-        }
-    }
-
-    private fun onStatus(st: Status?) {
-        runOnUiThread {
-            if (st != null && st.inGame && st.player != null) {
-                val dimChanged = playerDim != null && playerDim != st.dimension
-                playerDim = st.dimension
-                lastStatus = st
-                if (dimChanged && viewedDim.isEmpty()) {
-                    map.clearTiles()
-                    synchronized(pendingTiles) { pendingTiles.clear() }
-                }
-                updateWorldKey()
-                for (n in st.notifications) showNotification(n)
-                for (c in st.chat) appendChat(
-                    if (c.spans.isNotEmpty()) c.spans.toSpannable() else c.text)
-                // push invalidation: refresh exactly the regions that changed
-                for (d in st.dirty) {
-                    val dimMatch = if (viewedDim.isEmpty())
-                        st.dimension?.endsWith(d.dim) == true else viewedDim == d.dim
-                    if (dimMatch) {
-                        map.tileChanged(d.x, d.z)
-                        if (map.usingOverview()) {
-                            requestTile(Math.floorDiv(d.x, 4), Math.floorDiv(d.z, 4),
-                                force = true, overview = true)
-                        } else {
-                            requestTile(d.x, d.z, force = true, overview = false)
-                        }
-                    }
-                }
-                // trail recording (only in the player's dimension view)
-                val p = st.player
-                if (lastTrailX.isNaN() || Math.abs(p.x - lastTrailX) + Math.abs(p.z - lastTrailZ) >= 8) {
-                    lastTrailX = p.x
-                    lastTrailZ = p.z
-                    map.trail.add(doubleArrayOf(p.x, p.z))
-                    if (map.trail.size > 5000) map.trail.removeAt(0)
-                }
-                // only show the live arrow when looking at the player's dimension
-                val viewingPlayerDim = viewedDim.isEmpty() || effectiveViewedDim() == st.dimension
-                map.player = if (viewingPlayerDim) st.player else null
-                map.entities = if (viewingPlayerDim) st.entities else emptyList()
-                val sb = StringBuilder()
-                sb.append(st.worldId ?: "?").append('\n')
-                sb.append(st.dimension ?: "?").append('\n')
-                sb.append("%.0f, %.0f, %.0f".format(p.x, p.y, p.z))
-                if (st.dimension == "minecraft:the_nether") {
-                    sb.append("\nOW: %.0f, %.0f".format(p.x * 8, p.z * 8))
-                } else if (st.dimension == "minecraft:overworld") {
-                    sb.append("\nNether: %.0f, %.0f".format(p.x / 8, p.z / 8))
-                }
-                st.stats?.let { s ->
-                    sb.append("\n\n%.0f bps   %d ms   %.1f tps".format(s.bps, s.ping, s.tps))
-                    sb.append("\n❤ %.0f   ⛨ %d totem%s".format(s.hp, s.totems, if (s.totems == 1) "" else "s"))
-                    if (s.elytra >= 0) sb.append("   ⇗ ${s.elytra}%")
-                }
-                if (st.effects.isNotEmpty()) {
-                    val styled = android.text.SpannableStringBuilder(sb)
-                    styled.append("\n")
-                    for (e in st.effects) {
-                        val start = styled.length
-                        val time = when {
-                            e.seconds < 0 -> "∞"
-                            e.seconds >= 3600 -> "%d:%02d:%02d".format(e.seconds / 3600, e.seconds / 60 % 60, e.seconds % 60)
-                            else -> "%d:%02d".format(e.seconds / 60, e.seconds % 60)
-                        }
-                        styled.append("\n${e.name}  $time")
-                        styled.setSpan(
-                            android.text.style.ForegroundColorSpan(0xFF000000.toInt() or e.color),
-                            start, styled.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    }
-                    statusText.text = styled
-                } else {
-                    statusText.text = sb
-                }
-            } else if (st != null) {
-                map.player = null
-                statusText.text = "Connected — not in a world"
-            } else {
-                map.player = null
-                statusText.text = if (api.baseUrl.isEmpty())
-                    "Enter your PC's IP above" else "Offline — showing cached map"
-            }
-        }
-    }
-
-    /** SSE stream with automatic reconnect; falls back to nothing gracefully. */
-    private fun restartStream() {
-        streamJob?.cancel()
-        if (api.baseUrl.isEmpty()) return
-        streamJob = lifecycleScope.launch(Dispatchers.IO) {
-            while (true) {
-                try {
-                    api.streamBlocking { st -> onStatus(st) }
-                } catch (e: Exception) {
-                    // stream unavailable (old mod or hiccup) — poll for a bit instead
-                    var polled = false
-                    repeat(5) {
-                        val st = api.status()
-                        if (st != null) polled = true
-                        onStatus(st)
-                        delay(1000)
-                    }
-                    if (!polled) onStatus(null)
-                }
-                delay(1000)
-            }
-        }
-    }
-
-    /** Slow housekeeping: waypoints, dimension list, visible-tile revalidation. */
-    private fun startSlowLoop() {
-        slowJob?.cancel()
-        slowJob = lifecycleScope.launch {
-            var tick = 0
-            while (true) {
-                if (api.baseUrl.isNotEmpty() && lastStatus?.inGame == true) {
-                    if (tick % 10 == 0) refreshWaypoints()
-                    if (tick % 15 == 0) renderDimChips(api.dimensions())
-                    // newly explored regions: forget 404s so they get re-requested
-                    if (tick % 3 == 0) map.retryMissing()
-                    // keep the terrain around the player extra fresh
-                    if (tick % 2 == 0 && viewedDim.isEmpty()) {
-                        map.player?.let { p ->
-                            val prx = Math.floorDiv(p.x.toInt(), 512)
-                            val prz = Math.floorDiv(p.z.toInt(), 512)
-                            for (dx in -1..1) for (dz in -1..1) {
-                                requestTile(prx + dx, prz + dz, force = true)
-                            }
-                        }
-                    }
-                    // full visible revalidation, cheap thanks to ETags (304s)
-                    if (tick % 5 == 1) {
-                        for ((rx, rz) in map.visibleRegions()) requestTile(rx, rz, force = true)
-                    }
-                }
-                tick++
-                delay(1000)
-            }
-        }
-    }
-
-    // Xaero's 16 waypoint colors (Minecraft chat colors), by index
-    private val xaeroColorsDisplay = intArrayOf(
-        0xFF000000.toInt(), 0xFF0000AA.toInt(), 0xFF00AA00.toInt(), 0xFF00AAAA.toInt(),
-        0xFFAA0000.toInt(), 0xFFAA00AA.toInt(), 0xFFFFAA00.toInt(), 0xFFAAAAAA.toInt(),
-        0xFF555555.toInt(), 0xFF5555FF.toInt(), 0xFF55FF55.toInt(), 0xFF55FFFF.toInt(),
-        0xFFFF5555.toInt(), 0xFFFF55FF.toInt(), 0xFFFFFF55.toInt(), 0xFFFFFFFF.toInt()
-    )
-
-    private fun promptWaypoint(x: Int, z: Int) {
-        if (effectiveViewedDim() != playerDim && viewedDim.isNotEmpty()) {
-            statusText.append("\nWaypoints can only be added in your current dimension")
-            return
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 20, 40, 8)
-        }
-        val nameInput = EditText(this).apply {
-            hint = "Waypoint name"
-            inputType = InputType.TYPE_CLASS_TEXT
-        }
-        val yInput = EditText(this).apply {
-            hint = "Y (optional)"
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
-        }
-        container.addView(nameInput)
-        container.addView(yInput)
-        var chosenColor = 12 // red
-        val colorRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val swatches = ArrayList<View>()
-        for (i in 0 until 16) {
-            val v = View(this)
-            val lp = LinearLayout.LayoutParams(0, 56, 1f)
-            lp.setMargins(3, 16, 3, 0)
-            v.layoutParams = lp
-            v.setBackgroundColor(xaeroColorsDisplay[i])
-            v.alpha = if (i == chosenColor) 1f else 0.45f
-            v.setOnClickListener {
-                chosenColor = i
-                swatches.forEachIndexed { j, s -> s.alpha = if (j == i) 1f else 0.45f }
-            }
-            swatches.add(v)
-            colorRow.addView(v)
-        }
-        container.addView(colorRow)
-        AlertDialog.Builder(this)
-            .setTitle("Add waypoint at $x, $z")
-            .setView(container)
-            .setPositiveButton("Add") { _, _ ->
-                val name = nameInput.text.toString().ifBlank { "Deck" }
-                val y = yInput.text.toString().toIntOrNull()
-                lifecycleScope.launch {
-                    val ok = api.addWaypoint(x, z, name, y, chosenColor)
-                    statusText.append(if (ok) "\nWaypoint \"$name\" added" else "\nWaypoint add failed")
-                    refreshWaypoints()
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun showSettings() {
-        val prefs = getSharedPreferences("deck", MODE_PRIVATE)
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 20, 40, 8)
-        }
-
-        fun toggle(label: String, key: String, def: Boolean, apply: (Boolean) -> Unit): android.widget.CheckBox {
-            val cb = android.widget.CheckBox(this)
-            cb.text = label
-            cb.isChecked = prefs.getBoolean(key, def)
-            cb.setOnCheckedChangeListener { _, v ->
-                prefs.edit().putBoolean(key, v).apply()
-                apply(v)
-                map.invalidate()
-            }
-            container.addView(cb)
-            return cb
-        }
-
-        toggle("Show players (radar)", "showPlayers", true) { map.showPlayers = it }
-        toggle("Show mobs (radar)", "showHostiles", true) { map.showHostiles = it }
-        toggle("Grid overlay (regions / chunks)", "showGrid", false) { map.showGrid = it }
-        toggle("Show Meteor notifications", "showNotifs", true) { }
-        toggle("Show travel trail", "showTrail", true) { map.showTrail = it }
-
-        val tokenEdit = EditText(this)
-        tokenEdit.hint = "Pairing token (from remote-control module / config)"
-        tokenEdit.setText(prefs.getString("token", "") ?: "")
-        tokenEdit.setSingleLine()
-        tokenEdit.setOnEditorActionListener { v, _, _ ->
-            prefs.edit().putString("token", v.text.toString().trim()).apply()
-            api.token = v.text.toString().trim()
-            false
-        }
-        container.addView(tokenEdit)
-
-        val trailClear = android.widget.Button(this)
-        trailClear.text = "Clear travel trail"
-        trailClear.setOnClickListener {
-            map.trail.clear()
-            trailFile()?.delete()
-            map.invalidate()
-        }
-        container.addView(trailClear)
-
-        val worldsBtn = android.widget.Button(this)
-        worldsBtn.text = "Browse cached worlds"
-        worldsBtn.setOnClickListener { showWorldBrowser() }
-        container.addView(worldsBtn)
-        toggle("Keep screen awake", "keepAwake", true) {
-            if (it) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-
-        // active-module color for the Meteor panel
-        container.addView(TextView(this).apply {
-            text = "Enabled module color (Meteor panel)"
-            setPadding(0, 20, 0, 4)
-        })
-        val activeColors = intArrayOf(
-            0xFF55FF88.toInt(), 0xFFAA66FF.toInt(), 0xFF55DDFF.toInt(), 0xFFFFAA33.toInt(),
-            0xFFFF66AA.toInt(), 0xFFFF5555.toInt(), 0xFFFFFF55.toInt(), 0xFFFFFFFF.toInt()
-        )
-        val current = prefs.getInt("activeColor", 0xFF55FF88.toInt())
-        val colorRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val swatches = ArrayList<View>()
-        for (c in activeColors) {
-            val v = View(this)
-            val clp = LinearLayout.LayoutParams(0, 56, 1f)
-            clp.setMargins(3, 4, 3, 0)
-            v.layoutParams = clp
-            v.setBackgroundColor(c)
-            v.alpha = if (c == current) 1f else 0.4f
-            v.setOnClickListener {
-                prefs.edit().putInt("activeColor", c).apply()
-                swatches.forEach { s -> s.alpha = 0.4f }
-                v.alpha = 1f
-            }
-            swatches.add(v)
-            colorRow.addView(v)
-        }
-        container.addView(colorRow)
-
-        val cacheDir = api.worldCacheDir()
-        val sizeMb = (cacheDir?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L) / 1048576.0
-        val clearBtn = android.widget.Button(this)
-        clearBtn.text = "Clear map cache for this world (%.1f MB)".format(sizeMb)
-        clearBtn.setOnClickListener {
-            cacheDir?.deleteRecursively()
-            cacheDir?.mkdirs()
-            map.clearTiles()
-            statusText.append("\nTile cache cleared")
-        }
-        container.addView(clearBtn)
-
-        AlertDialog.Builder(this)
-            .setTitle("XaeroDeck settings")
-            .setView(container)
-            .setPositiveButton("Done", null)
-            .show()
-    }
-
-    private val seenNotifs = HashSet<Long>()
-
-    private fun appendChat(text: CharSequence) {
-        chatLog.add(text)
-        if (chatLog.size > 200) chatLog.removeAt(0)
-        chatDialogList?.let { list ->
-            val tv = TextView(this)
-            tv.text = text
-            tv.setTextColor(0xFFDDE6EE.toInt())
-            tv.textSize = 14f
-            list.addView(tv)
-            (list.parent as? android.widget.ScrollView)?.post {
-                (list.parent as android.widget.ScrollView).fullScroll(View.FOCUS_DOWN)
-            }
-        }
-    }
-
-    private fun showChat() {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(30, 10, 30, 8)
-        }
-        val scroll = android.widget.ScrollView(this)
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        for (line in chatLog) {
-            val tv = TextView(this)
-            tv.text = line
-            tv.setTextColor(0xFFDDE6EE.toInt())
-            tv.textSize = 14f
-            list.addView(tv)
-        }
-        scroll.addView(list)
-        container.addView(scroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 700))
-        chatDialogList = list
-        val input = EditText(this).apply {
-            hint = "Send chat (needs chat-relay module ON)…"
-            setSingleLine()
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
-        }
-        input.setOnEditorActionListener { v, _, _ ->
-            val text = v.text.toString().trim()
-            if (text.isNotEmpty()) {
-                lifecycleScope.launch {
-                    val ok = api.sendChat(text)
-                    if (ok) (v as EditText).setText("")
-                    else appendChat("⚠ send failed (chat-relay on? token set?)")
-                }
-            }
-            true
-        }
-        container.addView(input)
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-        AlertDialog.Builder(this)
-            .setTitle("Chat")
-            .setView(container)
-            .setPositiveButton("Close") { _, _ -> chatDialogList = null }
-            .setOnDismissListener { chatDialogList = null }
-            .show()
-    }
-
-    private fun showNotification(n: DeckNotification) {
-        if (!seenNotifs.add(n.id)) return
-        if (seenNotifs.size > 400) seenNotifs.clear().also { seenNotifs.add(n.id) }
-        if (n.text.startsWith("💀")) {
-            val vib = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
-            vib.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 300, 150, 300), -1))
-        }
-        if (!getSharedPreferences("deck", MODE_PRIVATE).getBoolean("showNotifs", true)) return
-        val overlay = findViewById<LinearLayout>(R.id.notifOverlay)
-        val tv = TextView(this)
-        tv.text = if (n.spans.isNotEmpty()) n.spans.toSpannable() else n.text
-        tv.setTextColor(0xFFFFFFFF.toInt())
-        tv.textSize = 15f
-        tv.setBackgroundColor(0xD0202430.toInt())
-        tv.setPadding(28, 14, 28, 14)
-        val lp = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp.topMargin = 6
-        overlay.addView(tv, lp)
-        while (overlay.childCount > 4) overlay.removeViewAt(0)
-        tv.alpha = 0f
-        tv.animate().alpha(1f).setDuration(150).start()
-        tv.postDelayed({
-            tv.animate().alpha(0f).setDuration(400)
-                .withEndAction { overlay.removeView(tv) }.start()
-        }, 5000)
-    }
-
-    private fun showMeteorPanel() {
-        val intent = android.content.Intent(this, MeteorActivity::class.java)
-        intent.putExtra("baseUrl", api.baseUrl)
-        startActivity(intent)
-    }
-
-    private fun applyViewPrefs() {
-        val prefs = getSharedPreferences("deck", MODE_PRIVATE)
-        map.showPlayers = prefs.getBoolean("showPlayers", true)
-        map.showHostiles = prefs.getBoolean("showHostiles", true)
-        map.showGrid = prefs.getBoolean("showGrid", false)
-        map.showTrail = prefs.getBoolean("showTrail", true)
-        api.token = prefs.getString("token", "") ?: ""
-        if (!prefs.getBoolean("keepAwake", true)) {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-        loadTrail()
+    private suspend fun refreshWaypoints() {
+        val wps = api.waypoints() ?: api.cachedWaypoints()
+        if (viewedDim.isNotEmpty() && effectiveViewedDim() != playerDim) return
+        map.waypoints = wps
+        waypointsS.value = wps
+        map.invalidate()
     }
 
     private fun trailFile(): java.io.File? = api.worldCacheDir()?.resolve("trail.csv")
@@ -697,8 +320,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveTrail() {
         try {
-            trailFile()?.writeText(map.trail.takeLast(5000)
-                .joinToString("\n") { "${it[0]},${it[1]}" })
+            trailFile()?.writeText(map.trail.takeLast(5000).joinToString("\n") { "${it[0]},${it[1]}" })
         } catch (e: Exception) {
         }
     }
@@ -708,83 +330,437 @@ class MainActivity : AppCompatActivity() {
         saveTrail()
     }
 
-    private fun showWorldBrowser() {
-        val worldsDir = java.io.File(filesDir, "worlds")
-        val dirs = worldsDir.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name } ?: emptyList()
-        if (dirs.isEmpty()) return
-        val names = dirs.map {
-            val mb = it.walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } / 1048576.0
-            "${it.name}  (%.1f MB)".format(mb)
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Cached worlds — tap LIVE chip to return")
-            .setItems(names) { _, which ->
-                saveTrail()
-                api.currentWorldKey = dirs[which].name
-                map.clearTiles()
-                synchronized(pendingTiles) { pendingTiles.clear() }
-                map.waypoints = api.cachedWaypoints()
-                loadTrail()
-                map.player = null
-                statusText.text = "Browsing cached: ${dirs[which].name}"
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
+    // ---------- UI ----------
 
-    private suspend fun refreshWaypoints() {
-        val wps = api.waypoints() ?: api.cachedWaypoints()
-        if (viewedDim.isNotEmpty() && effectiveViewedDim() != playerDim) return
-        map.waypoints = wps
-        waypointList.removeAllViews()
-        var widestRow = 0f
-        for (w in wps.sortedBy { it.name.lowercase() }) {
-            val row = TextView(this)
-            row.text = "● ${w.name}  (${w.x}, ${w.z})"
-            row.setTextColor(0xFF000000.toInt() or w.color)
-            row.textSize = 15f
-            row.setSingleLine()
-            row.setPadding(8, 10, 8, 10)
-            widestRow = maxOf(widestRow, row.paint.measureText(row.text.toString()) + 16)
-            row.setOnClickListener {
-                if (navMode) {
+    @Composable
+    private fun HudScreen() {
+        val mono = FontFamily.Monospace
+        var showChat by remember { mutableStateOf(false) }
+        var showSettings by remember { mutableStateOf(false) }
+        var addWpAt by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+        var deleteWp by remember { mutableStateOf<DeckWaypoint?>(null) }
+
+        LaunchedEffect(Unit) {
+            map.onLongPressBlock = { x, z ->
+                if (effectiveViewedDim() == playerDim || viewedDim.isEmpty()) {
+                    runOnUiThread { addWpAt = x to z }
+                } else log("WAYPOINTS ONLY IN CURRENT DIM")
+            }
+            map.onTapBlock = { x, z ->
+                if (navModeS.value) {
+                    val snap = 28f / map.scale
+                    val t = map.waypoints.minByOrNull {
+                        val dx = it.x - x.toDouble(); val dz = it.z - z.toDouble(); dx * dx + dz * dz
+                    }?.takeIf { Math.abs(it.x - x) <= snap && Math.abs(it.z - z) <= snap }
+                    val gx = t?.x ?: x; val gz = t?.z ?: z
                     lifecycleScope.launch {
-                        val ok = api.baritoneGoto(w.x, w.z)
-                        statusText.append(if (ok) "\n#goto → ${w.name} (${w.x}, ${w.z})"
-                        else "\nBaritone goto failed")
+                        val ok = api.baritoneGoto(gx, gz)
+                        log(when {
+                            !ok -> "GOTO FAILED :: REMOTE-CONTROL? TOKEN?"
+                            t != null -> "#GOTO ${t.name.uppercase()} $gx $gz"
+                            else -> "#GOTO $gx $gz"
+                        })
                     }
-                } else {
-                    map.follow = false
-                    map.centerOn(w.x.toDouble(), w.z.toDouble())
                 }
             }
-            row.setOnLongClickListener {
-                AlertDialog.Builder(this)
-                    .setTitle("Delete waypoint \"${w.name}\"?")
-                    .setPositiveButton("Delete") { _, _ ->
-                        lifecycleScope.launch {
-                            val ok = api.deleteWaypoint(w)
-                            statusText.append(if (ok) "\nDeleted \"${w.name}\"" else "\nDelete failed")
-                            refreshWaypoints()
+        }
+
+        Row(Modifier.fillMaxSize().background(Hud.bg)) {
+            Box(Modifier.weight(1f).fillMaxHeight()) {
+                AndroidView(factory = { map }, modifier = Modifier.fillMaxSize())
+
+                Row(Modifier.align(Alignment.TopStart).padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    DimChip("LIVE", viewedDim.isEmpty()) { map.follow = true; switchDim("") }
+                    for (d in dimsS.value) {
+                        val label = when (d.key) {
+                            "overworld" -> "OVERWORLD"; "the_nether" -> "NETHER"; "the_end" -> "END"
+                            else -> d.key.uppercase()
+                        }
+                        DimChip(label, viewedDim == d.key) { map.follow = false; switchDim(d.key) }
+                    }
+                }
+
+                Row(Modifier.align(Alignment.TopEnd).padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    HudButton("NAV", active = navModeS.value) {
+                        navModeS.value = !navModeS.value
+                        log(if (navModeS.value) "NAV :: TAP MAP OR WAYPOINT TO #GOTO — HOLD NAV TO #CANCEL" else "NAV OFF")
+                    }
+                    HudButton("CHAT") { showChat = true }
+                    HudButton("MTR") {
+                        val i = Intent(this@MainActivity, MeteorActivity::class.java)
+                        i.putExtra("baseUrl", api.baseUrl)
+                        startActivity(i)
+                    }
+                    HudButton("CFG") { showSettings = true }
+                    HudButton(if (panelS.value) "▶" else "◀") { panelS.value = !panelS.value }
+                }
+
+                Column(Modifier.align(Alignment.BottomEnd).padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    HudButton("+", big = true) { map.scale = (map.scale * 1.5f).coerceIn(0.05f, 16f); map.invalidate() }
+                    HudButton("−", big = true) { map.scale = (map.scale / 1.5f).coerceIn(0.05f, 16f); map.invalidate() }
+                }
+
+                Row(Modifier.align(Alignment.BottomStart).padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    HudButton(if (followS.value) "◉ FOLLOW" else "○ FREE", active = followS.value) {
+                        map.follow = !map.follow
+                        if (map.follow) { switchDim(""); map.player?.let { map.centerOn(it.x, it.z) } }
+                    }
+                    if (navModeS.value) HudButton("✕ CANCEL") {
+                        lifecycleScope.launch { api.baritoneCancel(); log("#CANCEL SENT") }
+                    }
+                }
+
+                Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 60.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    for ((_, t) in toasts) {
+                        Text(t, fontFamily = mono, fontSize = 13.sp,
+                            modifier = Modifier.background(Color(0xE0100D17))
+                                .border(1.dp, Hud.border).padding(horizontal = 12.dp, vertical = 7.dp))
+                    }
+                }
+
+                if (logS.value.isNotEmpty()) {
+                    Text(logS.value, fontFamily = mono, fontSize = 11.sp, color = Hud.accent,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp)
+                            .background(Color(0xE0100D17)).padding(horizontal = 10.dp, vertical = 4.dp))
+                }
+            }
+
+            if (panelS.value) SidePanel(mono)
+        }
+
+        if (showChat) ChatDialog(mono) { showChat = false }
+        if (showSettings) SettingsDialog(mono) { showSettings = false }
+        addWpAt?.let { (x, z) -> AddWaypointDialog(mono, x, z) { addWpAt = null } }
+        deleteWp?.let { w ->
+            ConfirmDialog(mono, "DELETE ${w.name.uppercase()}?", onConfirm = {
+                lifecycleScope.launch {
+                    log(if (api.deleteWaypoint(w)) "DELETED ${w.name.uppercase()}" else "DELETE FAILED")
+                    refreshWaypoints()
+                }
+                deleteWp = null
+            }) { deleteWp = null }
+        }
+
+        // waypoint delete hook for the panel list
+        panelDeleteRequest = { deleteWp = it }
+    }
+
+    private var panelDeleteRequest: (DeckWaypoint) -> Unit = {}
+
+    @Composable
+    private fun DimChip(label: String, selected: Boolean, onClick: () -> Unit) {
+        Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) Hud.onAccent else Hud.sub,
+            modifier = Modifier
+                .background(if (selected) Hud.accent else Hud.surface)
+                .border(1.dp, if (selected) Hud.accent else Hud.border)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 8.dp))
+    }
+
+    @Composable
+    private fun HudButton(label: String, active: Boolean = false, big: Boolean = false, onClick: () -> Unit) {
+        Text(label, fontFamily = FontFamily.Monospace,
+            fontSize = if (big) 20.sp else 14.sp,
+            color = if (active) Hud.onAccent else Hud.accent,
+            modifier = Modifier
+                .background(if (active) Hud.accent else Hud.surface)
+                .border(1.dp, if (active) Hud.accent else Hud.border)
+                .clickable(onClick = onClick)
+                .padding(horizontal = if (big) 16.dp else 12.dp, vertical = 8.dp))
+    }
+
+    @Composable
+    private fun SidePanel(mono: FontFamily) {
+        val st = statusS.value
+        Column(Modifier
+            .width(IntrinsicSize.Max)
+            .widthIn(min = 250.dp, max = 400.dp)
+            .fillMaxHeight()
+            .background(Hud.panel)
+            .border(1.dp, Hud.accent)
+            .padding(12.dp)
+            .verticalScroll(rememberScrollState())) {
+
+            browsingS.value?.let {
+                Text("▚ CACHED :: ${it.uppercase()}", fontFamily = mono, fontSize = 11.sp, color = Hud.yellow)
+                Text("TAP LIVE TO RETURN", fontFamily = mono, fontSize = 10.sp, color = Hud.sub)
+                Spacer(Modifier.height(8.dp))
+            }
+
+            if (st != null && st.inGame && st.player != null) {
+                val p = st.player
+                Text("▚ ${st.worldId?.uppercase() ?: "?"} :: ${st.dimension?.substringAfter(':')?.uppercase() ?: "?"}",
+                    fontFamily = mono, fontSize = 11.sp, color = Hud.accent)
+                Text("%.0f %.0f %.0f".format(p.x, p.y, p.z),
+                    fontFamily = mono, fontSize = 21.sp, color = Hud.text, fontWeight = FontWeight.Bold)
+                if (st.dimension == "minecraft:the_nether")
+                    Text("OW %.0f %.0f".format(p.x * 8, p.z * 8), fontFamily = mono, fontSize = 12.sp, color = Hud.green)
+                else if (st.dimension == "minecraft:overworld")
+                    Text("NETHER %.0f %.0f".format(p.x / 8, p.z / 8), fontFamily = mono, fontSize = 12.sp, color = Hud.green)
+                Spacer(Modifier.height(10.dp))
+                st.stats?.let { s ->
+                    StatLine(mono, "SPD", "%.0fbps".format(s.bps), "PING", "${s.ping}ms")
+                    StatLine(mono, "TPS", "%.1f".format(s.tps), "HP", "%.0f".format(s.hp),
+                        v1Color = if (s.tps >= 19) Hud.green else Hud.orange,
+                        v2Color = if (s.hp <= 8) Hud.red else Hud.text)
+                    StatLine(mono, "TTM", "×${s.totems}", "ELY",
+                        if (s.elytra >= 0) "${s.elytra}%" else "—",
+                        v2Color = if (s.elytra in 0..20) Hud.red else Hud.text)
+                }
+                if (st.effects.isNotEmpty()) {
+                    HudDivider(mono, "EFFECTS")
+                    for (e in st.effects) {
+                        val time = when {
+                            e.seconds < 0 -> "∞"
+                            e.seconds >= 3600 -> "%d:%02d:%02d".format(e.seconds / 3600, e.seconds / 60 % 60, e.seconds % 60)
+                            else -> "%d:%02d".format(e.seconds / 60, e.seconds % 60)
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(e.name.uppercase().replace(' ', '_'), fontFamily = mono, fontSize = 12.sp,
+                                color = Color(0xFF000000.toInt() or e.color).takeIf { e.color != 0 } ?: Hud.cyan)
+                            Text(time, fontFamily = mono, fontSize = 12.sp, color = Hud.text)
                         }
                     }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-                true
+                }
+            } else {
+                Text(if (connectedS.value) "▚ CONNECTED :: NOT IN WORLD"
+                else if (api.baseUrl.isEmpty()) "▚ AWAITING DISCOVERY…"
+                else "▚ OFFLINE :: CACHED MAP", fontFamily = mono, fontSize = 11.sp, color = Hud.sub)
+                if (autoAddrS.value.isNotEmpty())
+                    Text("AUTO ${autoAddrS.value}", fontFamily = mono, fontSize = 10.sp, color = Hud.green)
             }
-            waypointList.addView(row)
+
+            HudDivider(mono, "WAYPOINTS")
+            Text("TAP JUMP · NAV+TAP GOTO · HOLD DELETE", fontFamily = mono, fontSize = 9.sp, color = Hud.sub)
+            Spacer(Modifier.height(4.dp))
+            for (w in waypointsS.value.sortedBy { it.name.lowercase() }) {
+                Row(Modifier.fillMaxWidth()
+                    .clickable {
+                        if (navModeS.value) lifecycleScope.launch {
+                            log(if (api.baritoneGoto(w.x, w.z)) "#GOTO ${w.name.uppercase()}" else "GOTO FAILED")
+                        } else { map.follow = false; map.centerOn(w.x.toDouble(), w.z.toDouble()) }
+                    }
+                    .padding(vertical = 5.dp)) {
+                    Text("◆ ${w.name}  ${w.x} ${w.z}", fontFamily = mono, fontSize = 12.sp,
+                        color = Color(0xFF000000.toInt() or w.color),
+                        modifier = Modifier.weight(1f))
+                    Text("✕", fontFamily = mono, fontSize = 12.sp, color = Hud.sub,
+                        modifier = Modifier.clickable { panelDeleteRequest(w) }.padding(horizontal = 4.dp))
+                }
+            }
         }
-        // widen the side panel to fit the longest waypoint line (within reason)
-        val screenW = resources.displayMetrics.widthPixels
-        val minW = (screenW * 0.22f).toInt()
-        val maxW = (screenW * 0.45f).toInt()
-        val desired = (widestRow + 40).toInt().coerceIn(minW, maxW)
-        val lp = sidePanel.layoutParams as LinearLayout.LayoutParams
-        if (lp.width != desired) {
-            lp.width = desired
-            lp.weight = 0f
-            sidePanel.layoutParams = lp
+    }
+
+    @Composable
+    private fun StatLine(mono: FontFamily, k1: String, v1: String, k2: String, v2: String,
+                         v1Color: Color = Hud.text, v2Color: Color = Hud.text) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(k1, fontFamily = mono, fontSize = 12.sp, color = Hud.sub, modifier = Modifier.width(42.dp))
+            Text(v1, fontFamily = mono, fontSize = 12.sp, color = v1Color, modifier = Modifier.weight(1f))
+            Text(k2, fontFamily = mono, fontSize = 12.sp, color = Hud.sub, modifier = Modifier.width(46.dp))
+            Text(v2, fontFamily = mono, fontSize = 12.sp, color = v2Color)
         }
-        map.invalidate()
+    }
+
+    @Composable
+    private fun HudDivider(mono: FontFamily, label: String) {
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Hud.border))
+        Spacer(Modifier.height(6.dp))
+        Text(label, fontFamily = mono, fontSize = 11.sp, color = Hud.accent)
+        Spacer(Modifier.height(4.dp))
+    }
+
+    @Composable
+    private fun HudDialog(mono: FontFamily, title: String, onClose: () -> Unit,
+                          content: @Composable ColumnScope.() -> Unit) {
+        Dialog(onDismissRequest = onClose) {
+            Column(Modifier
+                .background(Hud.panel)
+                .border(1.dp, Hud.accent)
+                .padding(16.dp)
+                .widthIn(min = 320.dp, max = 560.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("▚ $title", fontFamily = mono, fontSize = 13.sp, color = Hud.accent)
+                    Text("✕", fontFamily = mono, fontSize = 13.sp, color = Hud.sub,
+                        modifier = Modifier.clickable(onClick = onClose))
+                }
+                Spacer(Modifier.height(10.dp))
+                content()
+            }
+        }
+    }
+
+    @Composable
+    private fun ChatDialog(mono: FontFamily, onClose: () -> Unit) {
+        var input by remember { mutableStateOf("") }
+        HudDialog(mono, "CHAT", onClose) {
+            LazyColumn(Modifier.height(340.dp).fillMaxWidth(), reverseLayout = false) {
+                items(chatLog.toList()) { line ->
+                    Text(line, fontFamily = mono, fontSize = 12.sp, color = Hud.text,
+                        modifier = Modifier.padding(vertical = 1.dp))
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            HudTextField(mono, input, { input = it }, "SEND (CHAT-RELAY MUST BE ON)", ImeAction.Send) {
+                val text = input.trim()
+                if (text.isNotEmpty()) lifecycleScope.launch {
+                    if (api.sendChat(text)) input = "" else log("SEND FAILED :: RELAY? TOKEN?")
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun AddWaypointDialog(mono: FontFamily, x: Int, z: Int, onClose: () -> Unit) {
+        var name by remember { mutableStateOf("") }
+        var y by remember { mutableStateOf("") }
+        var color by remember { mutableStateOf(12) }
+        val colors = intArrayOf(
+            0xFF000000.toInt(), 0xFF0000AA.toInt(), 0xFF00AA00.toInt(), 0xFF00AAAA.toInt(),
+            0xFFAA0000.toInt(), 0xFFAA00AA.toInt(), 0xFFFFAA00.toInt(), 0xFFAAAAAA.toInt(),
+            0xFF555555.toInt(), 0xFF5555FF.toInt(), 0xFF55FF55.toInt(), 0xFF55FFFF.toInt(),
+            0xFFFF5555.toInt(), 0xFFFF55FF.toInt(), 0xFFFFFF55.toInt(), 0xFFFFFFFF.toInt())
+        HudDialog(mono, "WAYPOINT @ $x $z", onClose) {
+            HudTextField(mono, name, { name = it }, "NAME", ImeAction.Next) {}
+            Spacer(Modifier.height(6.dp))
+            HudTextField(mono, y, { y = it }, "Y (OPTIONAL)", ImeAction.Done) {}
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                colors.forEachIndexed { i, c ->
+                    Box(Modifier.weight(1f).height(26.dp).background(Color(c))
+                        .border(if (i == color) 2.dp else 0.dp, if (i == color) Color.White else Color.Transparent)
+                        .clickable { color = i })
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            HudButton("ADD WAYPOINT", active = true) {
+                val n = name.ifBlank { "Deck" }
+                lifecycleScope.launch {
+                    val ok = api.addWaypoint(x, z, n, y.toIntOrNull(), color)
+                    log(if (ok) "ADDED ${n.uppercase()}" else "ADD FAILED")
+                    refreshWaypoints()
+                }
+                onClose()
+            }
+        }
+    }
+
+    @Composable
+    private fun ConfirmDialog(mono: FontFamily, title: String, onConfirm: () -> Unit, onClose: () -> Unit) {
+        HudDialog(mono, title, onClose) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HudButton("CONFIRM", active = true, onClick = onConfirm)
+                HudButton("ABORT", onClick = onClose)
+            }
+        }
+    }
+
+    @Composable
+    private fun SettingsDialog(mono: FontFamily, onClose: () -> Unit) {
+        val prefs = getSharedPreferences("deck", MODE_PRIVATE)
+        var addr by remember { mutableStateOf(prefs.getString("addr", "") ?: "") }
+        var token by remember { mutableStateOf(prefs.getString("token", "") ?: "") }
+        var showWorlds by remember { mutableStateOf(false) }
+        HudDialog(mono, "CONFIG", onClose) {
+            Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 480.dp)) {
+                HudTextField(mono, addr, { addr = it }, "PC IP (EMPTY = AUTO-DISCOVER)", ImeAction.Done) {
+                    prefs.edit().putString("addr", addr.trim()).apply()
+                    applyAddress(addr.trim()); map.clearTiles(); restartStream()
+                }
+                Spacer(Modifier.height(6.dp))
+                HudTextField(mono, token, { token = it }, "PAIRING TOKEN", ImeAction.Done) {
+                    prefs.edit().putString("token", token.trim()).apply()
+                    api.token = token.trim()
+                }
+                Spacer(Modifier.height(8.dp))
+                SettingSwitch(mono, "PLAYER RADAR", "showPlayers") { map.showPlayers = it }
+                SettingSwitch(mono, "MOB RADAR", "showHostiles") { map.showHostiles = it }
+                SettingSwitch(mono, "GRID OVERLAY", "showGrid") { map.showGrid = it }
+                SettingSwitch(mono, "TRAVEL TRAIL", "showTrail") { map.showTrail = it }
+                SettingSwitch(mono, "NOTIFICATIONS", "showNotifs") { }
+                SettingSwitch(mono, "KEEP AWAKE", "keepAwake") {
+                    if (it) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    HudButton("CLEAR TRAIL") { map.trail.clear(); trailFile()?.delete(); map.invalidate() }
+                    HudButton("CLEAR TILES") {
+                        api.worldCacheDir()?.deleteRecursively(); api.worldCacheDir()?.mkdirs()
+                        map.clearTiles(); log("TILE CACHE CLEARED")
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                HudButton("BROWSE CACHED WORLDS") { showWorlds = true }
+            }
+        }
+        if (showWorlds) {
+            val dirs = java.io.File(filesDir, "worlds").listFiles()?.filter { it.isDirectory }
+                ?.sortedBy { it.name } ?: emptyList()
+            HudDialog(mono, "CACHED WORLDS", { showWorlds = false }) {
+                for (d in dirs) {
+                    val mb = d.walkTopDown().filter { it.isFile }.sumOf { it.length() } / 1048576.0
+                    Text("◆ ${d.name}  %.1fMB".format(mb), fontFamily = mono, fontSize = 12.sp,
+                        color = Hud.text,
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            saveTrail()
+                            api.currentWorldKey = d.name
+                            browsingS.value = d.name
+                            map.clearTiles()
+                            synchronized(pendingTiles) { pendingTiles.clear() }
+                            map.waypoints = api.cachedWaypoints()
+                            waypointsS.value = map.waypoints
+                            loadTrail()
+                            map.player = null
+                            showWorlds = false
+                            onClose()
+                        }.padding(vertical = 6.dp))
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun SettingSwitch(mono: FontFamily, label: String, key: String, apply: (Boolean) -> Unit) {
+        val prefs = getSharedPreferences("deck", MODE_PRIVATE)
+        var checked by remember { mutableStateOf(prefs.getBoolean(key, key != "showGrid")) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, fontFamily = mono, fontSize = 12.sp, color = Hud.text)
+            Switch(checked = checked, onCheckedChange = {
+                checked = it
+                prefs.edit().putBoolean(key, it).apply()
+                apply(it)
+                map.invalidate()
+            }, colors = SwitchDefaults.colors(
+                checkedThumbColor = Hud.accent, checkedTrackColor = Hud.surfaceHi,
+                uncheckedThumbColor = Hud.sub, uncheckedTrackColor = Hud.surface))
+        }
+    }
+
+    @Composable
+    private fun HudTextField(mono: FontFamily, value: String, onChange: (String) -> Unit,
+                             placeholder: String, ime: ImeAction, onDone: () -> Unit) {
+        TextField(value = value, onValueChange = onChange,
+            placeholder = { Text(placeholder, fontFamily = mono, fontSize = 11.sp, color = Hud.sub) },
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontFamily = mono, fontSize = 13.sp, color = Hud.text),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ime),
+            keyboardActions = KeyboardActions(onDone = { onDone() }, onSend = { onDone() }, onNext = {}),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Hud.surface, unfocusedContainerColor = Hud.surface,
+                focusedIndicatorColor = Hud.accent, unfocusedIndicatorColor = Hud.border,
+                cursorColor = Hud.accent),
+            modifier = Modifier.fillMaxWidth())
     }
 }

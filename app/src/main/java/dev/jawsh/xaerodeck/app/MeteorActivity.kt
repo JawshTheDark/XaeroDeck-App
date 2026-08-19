@@ -1,400 +1,260 @@
 package dev.jawsh.xaerodeck.app
 
-import android.annotation.SuppressLint
 import android.os.Bundle
-import android.view.Gravity
-import android.view.View
-import android.view.inputmethod.EditorInfo
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import android.widget.EditText
-import android.widget.HorizontalScrollView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.SeekBar
-import android.widget.Spinner
-import android.widget.Switch
-import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-/**
- * Full-screen Meteor control panel: category rail + searchable module cards,
- * with each module's settings expanding inline inside its card.
- */
-class MeteorActivity : AppCompatActivity() {
+class MeteorActivity : ComponentActivity() {
     private lateinit var api: DeckApi
-    private lateinit var moduleList: LinearLayout
-    private lateinit var chipRow: LinearLayout
-    private var modules: List<DeckApi.MeteorModule> = emptyList()
-    private var category = ""
-    private var filter = ""
+    private var activeColor = Color(0xFF7EE787)
 
-    private val bg = 0xFF101214.toInt()
-    private val card = 0xFF1A1F27.toInt()
-    private val accent = 0xFF7FB8E8.toInt()
-    private val textCol = 0xFFE8EEF4.toInt()
-    private val subCol = 0xFF8899AA.toInt()
-    private var activeColor = 0xFF55FF88.toInt()
-
-    @SuppressLint("SetTextI18n")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         api = DeckApi(filesDir)
         api.baseUrl = intent.getStringExtra("baseUrl") ?: ""
         val prefs = getSharedPreferences("deck", MODE_PRIVATE)
         api.token = prefs.getString("token", "") ?: ""
-        activeColor = prefs.getInt("activeColor", 0xFF55FF88.toInt())
+        activeColor = Color(prefs.getInt("activeColor", 0xFF55FF88.toInt()))
+        setContent { MeteorScreen() }
+    }
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bg)
-            setPadding(24, 24, 24, 0)
-        }
+    @Composable
+    private fun MeteorScreen() {
+        val mono = FontFamily.Monospace
+        var modules by remember { mutableStateOf<List<DeckApi.MeteorModule>>(emptyList()) }
+        var loaded by remember { mutableStateOf(false) }
+        var category by remember { mutableStateOf("") }
+        var filter by remember { mutableStateOf("") }
 
-        val topRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val back = TextView(this).apply {
-            text = "‹ Map"
-            textSize = 18f
-            setTextColor(accent)
-            setPadding(8, 8, 30, 8)
-            setOnClickListener { finish() }
-        }
-        val title = TextView(this).apply {
-            text = "Meteor"
-            textSize = 20f
-            setTextColor(textCol)
-        }
-        val search = EditText(this).apply {
-            hint = "Search…"
-            setHintTextColor(subCol)
-            setTextColor(textCol)
-            setSingleLine()
-        }
-        topRow.addView(back)
-        topRow.addView(title)
-        topRow.addView(search, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            .apply { marginStart = 40 })
-        root.addView(topRow)
-
-        chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val chipScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-        chipScroll.addView(chipRow)
-        root.addView(chipScroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = 12 })
-
-        moduleList = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 12, 0, 40)
-        }
-        val scroll = ScrollView(this)
-        scroll.addView(moduleList)
-        root.addView(scroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        setContentView(root)
-
-        search.addTextChangedListener(object : android.text.TextWatcher {
-            override fun afterTextChanged(s: android.text.Editable?) {
-                filter = s.toString()
-                renderModules()
-            }
-            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-        })
-
-        lifecycleScope.launch {
+        LaunchedEffect(Unit) {
             modules = api.meteorModules()
-            if (modules.isEmpty()) {
-                val empty = TextView(this@MeteorActivity).apply {
-                    text = "Meteor not reachable.\nIs the game running with the latest XaeroDeck?"
-                    setTextColor(subCol)
-                    textSize = 16f
-                    setPadding(8, 60, 8, 0)
-                }
-                moduleList.addView(empty)
-                return@launch
+            loaded = true
+        }
+
+        Column(Modifier.fillMaxSize().background(Hud.bg).padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("‹ MAP", fontFamily = mono, fontSize = 14.sp, color = Hud.accent,
+                    modifier = Modifier.clickable { finish() }.padding(6.dp))
+                Text("▚ METEOR CONTROL", fontFamily = mono, fontSize = 14.sp,
+                    color = Hud.text, fontWeight = FontWeight.Bold)
+                TextField(value = filter, onValueChange = { filter = it },
+                    placeholder = { Text("SEARCH…", fontFamily = mono, fontSize = 11.sp, color = Hud.sub) },
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = mono, fontSize = 13.sp, color = Hud.text),
+                    singleLine = true,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Hud.surface, unfocusedContainerColor = Hud.surface,
+                        focusedIndicatorColor = Hud.accent, unfocusedIndicatorColor = Hud.border,
+                        cursorColor = Hud.accent),
+                    modifier = Modifier.weight(1f))
             }
-            renderChips()
-            renderModules()
+            Spacer(Modifier.height(8.dp))
+
+            Row(Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                val cats = listOf("") + modules.map { it.category }.distinct().sorted()
+                for (c in cats) {
+                    val sel = c == category
+                    Text(c.ifEmpty { "ALL" }.uppercase(), fontFamily = mono, fontSize = 12.sp,
+                        color = if (sel) Hud.onAccent else Hud.sub,
+                        modifier = Modifier
+                            .background(if (sel) Hud.accent else Hud.surface)
+                            .border(1.dp, if (sel) Hud.accent else Hud.border)
+                            .clickable { category = c }
+                            .padding(horizontal = 12.dp, vertical = 7.dp))
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            if (!loaded) {
+                Text("▚ QUERYING…", fontFamily = mono, fontSize = 12.sp, color = Hud.sub)
+            } else if (modules.isEmpty()) {
+                Text("▚ METEOR NOT REACHABLE\nREMOTE-CONTROL MODULE ON? TOKEN SET?",
+                    fontFamily = mono, fontSize = 13.sp, color = Hud.orange)
+            }
+
+            val visible = modules
+                .filter { category.isEmpty() || it.category == category }
+                .filter { filter.isEmpty() || it.title.contains(filter, true) || it.name.contains(filter, true) }
+                .sortedBy { it.title.lowercase() }
+
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(visible, key = { it.name }) { m -> ModuleCard(mono, m) }
+            }
         }
     }
 
-    private fun renderChips() {
-        chipRow.removeAllViews()
-        val cats = listOf("") + modules.map { it.category }.distinct().sorted()
-        for (c in cats) {
-            val chip = TextView(this)
-            chip.text = c.ifEmpty { "All" }
-            chip.textSize = 14f
-            val selected = c == category
-            chip.setTextColor(if (selected) 0xFF102030.toInt() else textCol)
-            chip.setBackgroundColor(if (selected) accent else card)
-            chip.setPadding(30, 14, 30, 14)
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.marginEnd = 12
-            chip.layoutParams = lp
-            chip.setOnClickListener {
-                category = c
-                renderChips()
-                renderModules()
-            }
-            chipRow.addView(chip)
-        }
-    }
+    @Composable
+    private fun ModuleCard(mono: FontFamily, m: DeckApi.MeteorModule) {
+        var active by remember(m.name) { mutableStateOf(m.active) }
+        var expanded by remember(m.name) { mutableStateOf(false) }
+        var settings by remember(m.name) { mutableStateOf<List<DeckApi.MeteorSetting>?>(null) }
 
-    @SuppressLint("SetTextI18n", "UseSwitchCompatOrMaterialCode")
-    private fun renderModules() {
-        moduleList.removeAllViews()
-        for (m in modules.sortedBy { it.title.lowercase() }) {
-            if (category.isNotEmpty() && m.category != category) continue
-            if (filter.isNotEmpty() &&
-                !m.title.contains(filter, true) && !m.name.contains(filter, true)) continue
-
-            val stripe = View(this)
-            val cardInner = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(22, 8, 28, 8)
-            }
-            val cardView = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setBackgroundColor(card)
-                addView(stripe, LinearLayout.LayoutParams(8, LinearLayout.LayoutParams.MATCH_PARENT))
-                addView(cardInner, LinearLayout.LayoutParams(0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            }
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.bottomMargin = 10
-            cardView.layoutParams = lp
-
-            val header = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            val titleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            val title = TextView(this).apply {
-                text = m.title
-                textSize = 17f
-            }
-            fun applyActiveLook(active: Boolean) {
-                title.setTextColor(if (active) activeColor else textCol)
-                stripe.setBackgroundColor(if (active) activeColor else card)
-            }
-            applyActiveLook(m.active)
-            val desc = TextView(this).apply {
-                text = m.description
-                textSize = 12f
-                setTextColor(subCol)
-                maxLines = 1
-            }
-            titleBox.addView(title)
-            titleBox.addView(desc)
-            header.addView(titleBox, LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            val expandArrow = TextView(this).apply {
-                text = "▾"
-                textSize = 18f
-                setTextColor(subCol)
-                setPadding(20, 0, 20, 0)
-            }
-            header.addView(expandArrow)
-            val sw = Switch(this)
-            sw.isChecked = m.active
-            sw.setOnCheckedChangeListener { _, v ->
-                lifecycleScope.launch {
-                    if (api.meteorToggle(m.name, v)) applyActiveLook(v)
-                    else sw.isChecked = !v
+        Row(Modifier.fillMaxWidth().background(Hud.surface)
+            .border(1.dp, if (active) activeColor else Hud.border)) {
+            Box(Modifier.width(4.dp).fillMaxHeight()
+                .background(if (active) activeColor else Hud.surface))
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).clickable {
+                        expanded = !expanded
+                        if (expanded && settings == null) lifecycleScope.launch {
+                            settings = api.meteorSettings(m.name)
+                        }
+                    }) {
+                        Text(m.title.uppercase(), fontFamily = mono, fontSize = 14.sp,
+                            color = if (active) activeColor else Hud.text,
+                            fontWeight = FontWeight.Bold)
+                        Text(m.description, fontFamily = mono, fontSize = 10.sp,
+                            color = Hud.sub, maxLines = 1)
+                    }
+                    Text(if (expanded) "▴" else "▾", fontFamily = mono, fontSize = 14.sp,
+                        color = Hud.sub, modifier = Modifier.padding(horizontal = 10.dp)
+                            .clickable {
+                                expanded = !expanded
+                                if (expanded && settings == null) lifecycleScope.launch {
+                                    settings = api.meteorSettings(m.name)
+                                }
+                            })
+                    Switch(checked = active, onCheckedChange = { v ->
+                        lifecycleScope.launch {
+                            if (api.meteorToggle(m.name, v)) active = v
+                        }
+                    }, colors = SwitchDefaults.colors(
+                        checkedThumbColor = activeColor, checkedTrackColor = Hud.surfaceHi,
+                        uncheckedThumbColor = Hud.sub, uncheckedTrackColor = Hud.bg))
                 }
-            }
-            header.addView(sw)
-            cardInner.addView(header)
-
-            val settingsBox = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                visibility = View.GONE
-                setPadding(8, 4, 8, 12)
-            }
-            cardInner.addView(settingsBox)
-
-            var loaded = false
-            val toggleExpand = {
-                if (settingsBox.visibility == View.VISIBLE) {
-                    settingsBox.visibility = View.GONE
-                    expandArrow.text = "▾"
-                } else {
-                    settingsBox.visibility = View.VISIBLE
-                    expandArrow.text = "▴"
-                    if (!loaded) {
-                        loaded = true
-                        loadSettings(m, settingsBox)
+                if (expanded) {
+                    Spacer(Modifier.height(4.dp))
+                    when (val s = settings) {
+                        null -> Text("QUERYING…", fontFamily = mono, fontSize = 11.sp, color = Hud.sub)
+                        else -> {
+                            if (s.isEmpty()) Text("NO SETTINGS", fontFamily = mono, fontSize = 11.sp, color = Hud.sub)
+                            var lastGroup = ""
+                            for (setting in s) {
+                                if (setting.group != lastGroup) {
+                                    lastGroup = setting.group
+                                    Spacer(Modifier.height(6.dp))
+                                    Text("── ${setting.group.uppercase()}", fontFamily = mono,
+                                        fontSize = 10.sp, color = Hud.accent)
+                                }
+                                SettingRow(mono, m, setting)
+                            }
+                        }
                     }
                 }
             }
-            header.setOnClickListener { toggleExpand() }
-
-            moduleList.addView(cardView)
         }
     }
 
-    @SuppressLint("SetTextI18n", "UseSwitchCompatOrMaterialCode")
-    private fun loadSettings(m: DeckApi.MeteorModule, box: LinearLayout) {
-        val loading = TextView(this).apply {
-            text = "Loading…"
-            setTextColor(subCol)
+    @Composable
+    private fun SettingRow(mono: FontFamily, m: DeckApi.MeteorModule, s: DeckApi.MeteorSetting) {
+        fun apply(value: String) {
+            lifecycleScope.launch { api.meteorSetSetting(m.name, s.name, value) }
         }
-        box.addView(loading)
-        lifecycleScope.launch {
-            val settings = api.meteorSettings(m.name)
-            box.removeAllViews()
-            if (settings.isEmpty()) {
-                box.addView(TextView(this@MeteorActivity).apply {
-                    text = "No settings"
-                    setTextColor(subCol)
-                })
-                return@launch
-            }
-            var lastGroup = ""
-            for (s in settings) {
-                if (s.group != lastGroup) {
-                    lastGroup = s.group
-                    box.addView(TextView(this@MeteorActivity).apply {
-                        text = s.group.uppercase()
-                        setTextColor(accent)
-                        textSize = 11f
-                        setPadding(0, 18, 0, 6)
-                    })
-                }
-                box.addView(settingRow(m, s))
-            }
-        }
-    }
-
-    @SuppressLint("SetTextI18n", "UseSwitchCompatOrMaterialCode")
-    private fun settingRow(m: DeckApi.MeteorModule, s: DeckApi.MeteorSetting): View {
-        fun apply(value: String, feedback: TextView? = null) {
-            lifecycleScope.launch {
-                val ok = api.meteorSetSetting(m.name, s.name, value)
-                feedback?.setTextColor(if (ok) subCol else 0xFFFF5555.toInt())
-            }
-        }
-
-        return when {
+        when {
             s.type == "label" -> {
-                TextView(this).apply {
-                    text = "${s.title}: ${s.value}"
-                    textSize = 15f
-                    setTextColor(subCol)
-                    setPadding(0, 6, 0, 6)
-                }
+                Text("${s.title.uppercase()}: ${s.value}", fontFamily = mono, fontSize = 11.sp,
+                    color = Hud.sub, modifier = Modifier.padding(vertical = 3.dp))
             }
-
             s.type == "bool" -> {
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
+                var checked by remember(m.name + s.name) { mutableStateOf(s.value == "true") }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(s.title.uppercase(), fontFamily = mono, fontSize = 12.sp, color = Hud.text)
+                    Switch(checked = checked, onCheckedChange = { checked = it; apply(it.toString()) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Hud.accent, checkedTrackColor = Hud.surfaceHi,
+                            uncheckedThumbColor = Hud.sub, uncheckedTrackColor = Hud.bg))
                 }
-                val label = TextView(this).apply {
-                    text = s.title
-                    textSize = 15f
-                    setTextColor(textCol)
-                }
-                row.addView(label, LinearLayout.LayoutParams(0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                val sw = Switch(this)
-                sw.isChecked = s.value == "true"
-                sw.setOnCheckedChangeListener { _, v -> apply(v.toString()) }
-                row.addView(sw)
-                row.setPadding(0, 6, 0, 6)
-                row
             }
-
             s.sliderMax > s.sliderMin -> {
-                val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                val label = TextView(this).apply {
-                    textSize = 15f
-                    setTextColor(textCol)
+                var value by remember(m.name + s.name) {
+                    mutableStateOf((s.value.toDoubleOrNull() ?: s.sliderMin).toFloat())
                 }
-                val steps = 200
-                val cur = s.value.toDoubleOrNull() ?: s.sliderMin
                 fun fmt(v: Double) = if (s.decimals == 0) v.roundToInt().toString()
                 else "%.${s.decimals}f".format(v)
-                label.text = "${s.title}: ${fmt(cur)}"
-                val seek = SeekBar(this)
-                seek.max = steps
-                seek.progress = (((cur - s.sliderMin) / (s.sliderMax - s.sliderMin)) * steps)
-                    .roundToInt().coerceIn(0, steps)
-                seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    var v = cur
-                    override fun onProgressChanged(sb: SeekBar?, p: Int, user: Boolean) {
-                        v = s.sliderMin + (s.sliderMax - s.sliderMin) * p / steps
-                        label.text = "${s.title}: ${fmt(v)}"
-                    }
-                    override fun onStartTrackingTouch(sb: SeekBar?) {}
-                    override fun onStopTrackingTouch(sb: SeekBar?) = apply(fmt(v))
-                })
-                col.addView(label)
-                col.addView(seek)
-                col.setPadding(0, 6, 0, 6)
-                col
+                Column(Modifier.padding(vertical = 2.dp)) {
+                    Text("${s.title.uppercase()}: ${fmt(value.toDouble())}", fontFamily = mono,
+                        fontSize = 12.sp, color = Hud.text)
+                    Slider(value = value,
+                        onValueChange = { value = it },
+                        onValueChangeFinished = { apply(fmt(value.toDouble())) },
+                        valueRange = s.sliderMin.toFloat()..s.sliderMax.toFloat(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Hud.accent, activeTrackColor = Hud.accent,
+                            inactiveTrackColor = Hud.border))
+                }
             }
-
             s.options.isNotEmpty() -> {
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                }
-                row.addView(TextView(this).apply {
-                    text = s.title
-                    textSize = 15f
-                    setTextColor(textCol)
-                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                val spinner = Spinner(this)
-                spinner.adapter = ArrayAdapter(this,
-                    android.R.layout.simple_spinner_dropdown_item, s.options)
-                val cur = s.options.indexOfFirst { it.equals(s.value, true) }
-                if (cur >= 0) spinner.setSelection(cur)
-                var first = true
-                spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                        if (first) { first = false; return }
-                        apply(s.options[pos])
+                var open by remember { mutableStateOf(false) }
+                var value by remember(m.name + s.name) { mutableStateOf(s.value) }
+                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(s.title.uppercase(), fontFamily = mono, fontSize = 12.sp, color = Hud.text)
+                    Box {
+                        Text("$value ▾", fontFamily = mono, fontSize = 12.sp, color = Hud.accent,
+                            modifier = Modifier.background(Hud.bg).border(1.dp, Hud.border)
+                                .clickable { open = true }
+                                .padding(horizontal = 10.dp, vertical = 5.dp))
+                        DropdownMenu(expanded = open, onDismissRequest = { open = false },
+                            modifier = Modifier.background(Hud.panel)) {
+                            for (opt in s.options) {
+                                DropdownMenuItem(text = {
+                                    Text(opt, fontFamily = mono, fontSize = 12.sp, color = Hud.text)
+                                }, onClick = { value = opt; apply(opt); open = false })
+                            }
+                        }
                     }
-                    override fun onNothingSelected(p: AdapterView<*>?) {}
                 }
-                row.addView(spinner)
-                row.setPadding(0, 6, 0, 6)
-                row
             }
-
             else -> {
-                val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                val label = TextView(this).apply {
-                    text = s.title
-                    textSize = 15f
-                    setTextColor(textCol)
+                var value by remember(m.name + s.name) { mutableStateOf(s.value) }
+                Column(Modifier.padding(vertical = 2.dp)) {
+                    Text("${s.title.uppercase()} (${s.type})", fontFamily = mono, fontSize = 11.sp, color = Hud.sub)
+                    TextField(value = value, onValueChange = { value = it }, singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = mono, fontSize = 12.sp, color = Hud.text),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onDone = { apply(value) }),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Hud.bg, unfocusedContainerColor = Hud.bg,
+                            focusedIndicatorColor = Hud.accent, unfocusedIndicatorColor = Hud.border,
+                            cursorColor = Hud.accent),
+                        modifier = Modifier.fillMaxWidth())
                 }
-                val edit = EditText(this).apply {
-                    setText(s.value)
-                    setTextColor(textCol)
-                    setSingleLine()
-                    imeOptions = EditorInfo.IME_ACTION_DONE
-                }
-                edit.setOnEditorActionListener { v, _, _ ->
-                    apply(v.text.toString(), label)
-                    false
-                }
-                col.addView(label)
-                col.addView(edit)
-                col.setPadding(0, 6, 0, 6)
-                col
             }
         }
     }
