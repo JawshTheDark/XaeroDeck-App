@@ -418,9 +418,10 @@ class MainActivity : ComponentActivity() {
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
                     for ((_, t) in toasts) {
-                        Text(t, fontFamily = mono, fontSize = 13.sp,
-                            modifier = Modifier.background(Color(0xE0100D17))
-                                .border(1.dp, Hud.border).padding(horizontal = 12.dp, vertical = 7.dp))
+                        Text(t, fontFamily = mono, fontSize = 17.sp,
+                            modifier = Modifier.background(Color(0xF0100D17))
+                                .border(1.dp, Hud.accent)
+                                .padding(horizontal = 18.dp, vertical = 12.dp))
                     }
                 }
 
