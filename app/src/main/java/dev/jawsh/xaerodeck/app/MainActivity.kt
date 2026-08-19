@@ -8,8 +8,9 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -612,10 +613,30 @@ class MainActivity : ComponentActivity() {
         var input by remember { mutableStateOf("") }
         var fontSize by remember { mutableStateOf(prefs.getFloat("chatFontSize", 14f)) }
         val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-        // pinch to shrink / spread to enlarge chat text
-        val zoomState = rememberTransformableState { zoom, _, _ ->
-            fontSize = (fontSize * zoom).coerceIn(9f, 30f)
-            prefs.edit().putFloat("chatFontSize", fontSize).apply()
+        // pinch to shrink / spread to enlarge chat text — handled on the initial
+        // pointer pass so the scrolling list can't steal two-finger gestures
+        val pinchModifier = Modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                var lastDist = -1f
+                do {
+                    val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                    val pressed = event.changes.filter { it.pressed }
+                    if (pressed.size >= 2) {
+                        val a = pressed[0].position
+                        val b = pressed[1].position
+                        val dist = kotlin.math.hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble()).toFloat()
+                        if (lastDist > 0f && dist > 0f) {
+                            fontSize = (fontSize * (dist / lastDist)).coerceIn(9f, 30f)
+                            prefs.edit().putFloat("chatFontSize", fontSize).apply()
+                        }
+                        lastDist = dist
+                        event.changes.forEach { it.consume() }
+                    } else {
+                        lastDist = -1f
+                    }
+                } while (event.changes.any { it.pressed })
+            }
         }
         // pin to the newest line on open and whenever chat grows
         LaunchedEffect(chatLog.size) {
@@ -623,7 +644,7 @@ class MainActivity : ComponentActivity() {
         }
         HudDialog(mono, "CHAT", onClose, wide = true, fillHeight = true) {
             LazyColumn(Modifier.weight(1f).fillMaxWidth()
-                .transformable(zoomState), state = listState) {
+                .then(pinchModifier), state = listState) {
                 items(chatLog.toList()) { line ->
                     Text(line, fontFamily = mono, fontSize = fontSize.sp, color = Hud.text,
                         modifier = Modifier.padding(vertical = 2.dp))
