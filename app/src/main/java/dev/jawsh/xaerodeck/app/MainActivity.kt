@@ -64,7 +64,7 @@ class MainActivity : ComponentActivity() {
     private val waypointsS = mutableStateOf<List<DeckWaypoint>>(emptyList())
     private val dimsS = mutableStateOf<List<DeckApi.Dimension>>(emptyList())
     private val followS = mutableStateOf(true)
-    private val navModeS = mutableStateOf(false)
+    private val navModeS = mutableStateOf(0) // 0 off, 1 walk (#goto), 2 fly (autopilot)
     private val panelS = mutableStateOf(true)
     private val logS = mutableStateOf("")
     private val autoAddrS = mutableStateOf("")
@@ -192,6 +192,7 @@ class MainActivity : ComponentActivity() {
                 val viewingPlayerDim = viewedDim.isEmpty() || effectiveViewedDim() == st.dimension
                 map.player = if (viewingPlayerDim) st.player else null
                 map.entities = if (viewingPlayerDim) st.entities else emptyList()
+                map.autopilotTarget = if (viewingPlayerDim) st.autopilot else null
             } else {
                 map.player = null
             }
@@ -350,18 +351,21 @@ class MainActivity : ComponentActivity() {
                 } else log("WAYPOINTS ONLY IN CURRENT DIM")
             }
             map.onTapBlock = { x, z ->
-                if (navModeS.value) {
+                if (navModeS.value > 0) {
                     val snap = 28f / map.scale
                     val t = map.waypoints.minByOrNull {
                         val dx = it.x - x.toDouble(); val dz = it.z - z.toDouble(); dx * dx + dz * dz
                     }?.takeIf { Math.abs(it.x - x) <= snap && Math.abs(it.z - z) <= snap }
                     val gx = t?.x ?: x; val gz = t?.z ?: z
+                    val fly = navModeS.value == 2
                     lifecycleScope.launch {
-                        val ok = api.baritoneGoto(gx, gz)
+                        val ok = if (fly) api.autopilotFly(gx, gz) else api.baritoneGoto(gx, gz)
+                        val verb = if (fly) "✈ FLY" else "#GOTO"
                         log(when {
+                            !ok && fly -> "FLY FAILED :: DECK-AUTOPILOT MODULE ON?"
                             !ok -> "GOTO FAILED :: REMOTE-CONTROL? TOKEN?"
-                            t != null -> "#GOTO ${t.name.uppercase()} $gx $gz"
-                            else -> "#GOTO $gx $gz"
+                            t != null -> "$verb ${t.name.uppercase()} $gx $gz"
+                            else -> "$verb $gx $gz"
                         })
                     }
                 }
@@ -386,9 +390,15 @@ class MainActivity : ComponentActivity() {
 
                 Row(Modifier.align(Alignment.TopEnd).padding(10.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    HudButton("NAV", active = navModeS.value) {
-                        navModeS.value = !navModeS.value
-                        log(if (navModeS.value) "NAV :: TAP MAP OR WAYPOINT TO #GOTO — HOLD NAV TO #CANCEL" else "NAV OFF")
+                    HudButton(when (navModeS.value) {
+                        1 -> "WALK"; 2 -> "FLY"; else -> "NAV"
+                    }, active = navModeS.value > 0) {
+                        navModeS.value = (navModeS.value + 1) % 3
+                        log(when (navModeS.value) {
+                            1 -> "WALK :: TAP MAP/WAYPOINT TO #GOTO"
+                            2 -> "FLY :: TAP MAP/WAYPOINT TO AUTOPILOT (ELYTRAFLY + DECK-AUTOPILOT ON)"
+                            else -> "NAV OFF"
+                        })
                     }
                     HudButton("CHAT") { showChat = true }
                     HudButton("MTR") {
@@ -412,8 +422,8 @@ class MainActivity : ComponentActivity() {
                         map.follow = !map.follow
                         if (map.follow) { switchDim(""); map.player?.let { map.centerOn(it.x, it.z) } }
                     }
-                    if (navModeS.value) HudButton("✕ CANCEL") {
-                        lifecycleScope.launch { api.baritoneCancel(); log("#CANCEL SENT") }
+                    if (navModeS.value > 0 || map.autopilotTarget != null) HudButton("✕ CANCEL") {
+                        lifecycleScope.launch { api.baritoneCancel(); log("CANCELLED") }
                     }
                 }
 
@@ -550,9 +560,15 @@ class MainActivity : ComponentActivity() {
                     .background(Hud.surface)
                     .border(1.dp, Hud.border)
                     .clickable {
-                        if (navModeS.value) lifecycleScope.launch {
-                            log(if (api.baritoneGoto(w.x, w.z)) "#GOTO ${w.name.uppercase()}" else "GOTO FAILED")
-                        } else { map.follow = false; map.centerOn(w.x.toDouble(), w.z.toDouble()) }
+                        when (navModeS.value) {
+                            1 -> lifecycleScope.launch {
+                                log(if (api.baritoneGoto(w.x, w.z)) "#GOTO ${w.name.uppercase()}" else "GOTO FAILED")
+                            }
+                            2 -> lifecycleScope.launch {
+                                log(if (api.autopilotFly(w.x, w.z)) "✈ FLY ${w.name.uppercase()}" else "FLY FAILED :: DECK-AUTOPILOT ON?")
+                            }
+                            else -> { map.follow = false; map.centerOn(w.x.toDouble(), w.z.toDouble()) }
+                        }
                     }
                     .padding(start = 10.dp, top = 2.dp, bottom = 2.dp),
                     verticalAlignment = Alignment.CenterVertically) {

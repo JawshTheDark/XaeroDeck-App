@@ -54,7 +54,8 @@ data class Status(
     val stats: DeckStats? = null,
     val chat: List<DeckNotification> = emptyList(),
     val dirty: List<DirtyRegion> = emptyList(),
-    val effects: List<DeckEffect> = emptyList()
+    val effects: List<DeckEffect> = emptyList(),
+    val autopilot: DoubleArray? = null
 )
 
 private fun parseStatus(o: JSONObject): Status {
@@ -109,9 +110,12 @@ private fun parseStatus(o: JSONObject): Status {
             effects.add(DeckEffect(e.optString("n"), e.optInt("s"), e.optInt("c")))
         }
     }
+    val autopilot = o.optJSONObject("autopilot")?.let {
+        doubleArrayOf(it.optDouble("x"), it.optDouble("z"))
+    }
     return Status(o.optBoolean("inGame"), player,
         o.optString("dimension", null), o.optString("worldId", null), ents,
-        notifList("notifications"), stats, notifList("chat"), dirty, effects)
+        notifList("notifications"), stats, notifList("chat"), dirty, effects, autopilot)
 }
 
 data class DeckWaypoint(
@@ -337,6 +341,11 @@ class DeckApi(private val baseDir: File) {
 
     suspend fun baritoneCancel(): Boolean = withContext(Dispatchers.IO) {
         postJson("/api/baritone", JSONObject().put("action", "cancel"))?.optBoolean("ok") == true
+    }
+
+    suspend fun autopilotFly(x: Int, z: Int): Boolean = withContext(Dispatchers.IO) {
+        postJson("/api/baritone", JSONObject().put("action", "flyto").put("x", x).put("z", z))
+            ?.optBoolean("ok") == true
     }
 
     private fun postJson(path: String, body: JSONObject): JSONObject? {

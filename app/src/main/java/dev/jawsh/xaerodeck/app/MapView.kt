@@ -30,6 +30,7 @@ class MapView @JvmOverloads constructor(
 
     var waypoints: List<DeckWaypoint> = emptyList()
     var entities: List<EntityDot> = emptyList()
+    var autopilotTarget: DoubleArray? = null
     var showPlayers = true
     var showHostiles = true
     var showGrid = false
@@ -288,6 +289,33 @@ class MapView @JvmOverloads constructor(
             canvas.drawCircle(sx, sz, 10f, markerPaint)
             markerPaint.style = Paint.Style.FILL
             if (scale > 0.4f) canvas.drawText(w.name, sx, sz - 16f, textPaint)
+        }
+
+        // autopilot target + course line
+        autopilotTarget?.let { t ->
+            val tx = ((t[0] - left) * scale).toFloat()
+            val tz = ((t[1] - top) * scale).toFloat()
+            player?.let { p ->
+                val px = ((p.x - left) * scale).toFloat()
+                val pz = ((p.z - top) * scale).toFloat()
+                markerPaint.color = 0x80FF79C6.toInt()
+                markerPaint.style = Paint.Style.STROKE
+                markerPaint.strokeWidth = 3f
+                canvas.drawLine(px, pz, tx, tz, markerPaint)
+                markerPaint.style = Paint.Style.FILL
+            }
+            canvas.save()
+            canvas.translate(tx, tz)
+            canvas.rotate(45f)
+            markerPaint.color = 0xFFFF79C6.toInt()
+            canvas.drawRect(-11f, -11f, 11f, 11f, markerPaint)
+            markerPaint.color = Color.WHITE
+            markerPaint.style = Paint.Style.STROKE
+            markerPaint.strokeWidth = 2.5f
+            canvas.drawRect(-11f, -11f, 11f, 11f, markerPaint)
+            markerPaint.style = Paint.Style.FILL
+            canvas.restore()
+            canvas.drawText("FLY", tx, tz - 20f, textPaint)
         }
 
         // player arrow at the smoothed position
