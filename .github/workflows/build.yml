@@ -35,5 +35,8 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           cp app/build/outputs/apk/debug/app-debug.apk xaerodeck-app.apk
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-          gh release upload "$TAG" xaerodeck-app.apk --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" xaerodeck-app.apk --clobber
+          else
+            gh release create "$TAG" --generate-notes xaerodeck-app.apk
+          fi
