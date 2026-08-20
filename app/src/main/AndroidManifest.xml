@@ -9,6 +9,7 @@
     <application
         android:label="XaeroDeck"
         android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
         android:theme="@style/Theme.XaeroDeck"
         android:usesCleartextTraffic="true">
         <activity

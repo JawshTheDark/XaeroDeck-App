@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
 
     private var viewedDim = ""
     private var playerDim: String? = null
+    @Volatile private var ignoredServer: String? = null // last spoof-ignored beacon ip
     private var lastStatus: Status? = null
     private var lastTrailX = Double.NaN
     private var lastTrailZ = 0.0
@@ -144,8 +145,14 @@ class MainActivity : ComponentActivity() {
         synchronized(pendingTiles) { if (!pendingTiles.add(key)) return }
         lifecycleScope.launch(Dispatchers.IO) {
             tileSemaphore.withPermit {
-                val bmp = api.tile(dim, rx, rz, force, overview)
-                if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, bmp, overview) }
+                // Unchanged (304) leaves the existing cached bitmap untouched — no putTile.
+                when (val res = api.tile(dim, rx, rz, force, overview)) {
+                    is TileResult.Loaded ->
+                        if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, res.bitmap, overview) }
+                    is TileResult.Missing ->
+                        if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, null, overview) }
+                    is TileResult.Unchanged -> {}
+                }
             }
             synchronized(pendingTiles) { pendingTiles.remove(key) }
         }
@@ -157,8 +164,13 @@ class MainActivity : ComponentActivity() {
         synchronized(pendingTiles) { if (!pendingTiles.add(key)) return }
         lifecycleScope.launch(Dispatchers.IO) {
             tileSemaphore.withPermit {
-                val bmp = api.oracleTile(dim, rx, rz, force)
-                if (dim == viewedDim) launch(Dispatchers.Main) { map.putOracleTile(rx, rz, bmp) }
+                when (val res = api.oracleTile(dim, rx, rz, force)) {
+                    is TileResult.Loaded ->
+                        if (dim == viewedDim) launch(Dispatchers.Main) { map.putOracleTile(rx, rz, res.bitmap) }
+                    is TileResult.Missing ->
+                        if (dim == viewedDim) launch(Dispatchers.Main) { map.putOracleTile(rx, rz, null) }
+                    is TileResult.Unchanged -> {}
+                }
             }
             synchronized(pendingTiles) { pendingTiles.remove(key) }
         }
@@ -240,7 +252,9 @@ class MainActivity : ComponentActivity() {
             } else {
                 map.player = null
             }
-            map.invalidate()
+            // No unconditional invalidate here: the player/entities/waypoints/
+            // autopilotTarget setters each post an invalidate when their drawn
+            // state actually changes, so redraws still track live updates.
         }
     }
 
@@ -386,11 +400,28 @@ class MainActivity : ComponentActivity() {
                             val msg = String(packet.data, 0, packet.length)
                             if (msg.startsWith("XAERODECK ")) {
                                 val port = msg.split(" ")[1].toIntOrNull() ?: 8399
-                                val url = "http://${packet.address.hostAddress}:$port"
-                                if (api.baseUrl != url) {
-                                    api.baseUrl = url
-                                    autoAddrS.value = packet.address.hostAddress ?: ""
-                                    restartStream()
+                                val ip = packet.address.hostAddress ?: ""
+                                val url = "http://$ip:$port"
+                                val current = api.baseUrl
+                                when {
+                                    current == url -> {} // already on this server — no-op
+                                    // adopt only when we have no server yet, or the current
+                                    // one is dead; never let a beacon redirect a live connection
+                                    current.isEmpty() || !connectedS.value -> {
+                                        api.baseUrl = url
+                                        autoAddrS.value = ip
+                                        ignoredServer = null
+                                        restartStream()
+                                    }
+                                    // different server while connected: possible spoof — ignore
+                                    else -> if (ignoredServer != ip) {
+                                        ignoredServer = ip
+                                        runOnUiThread {
+                                            android.widget.Toast.makeText(this@MainActivity,
+                                                "ignoring different server $ip",
+                                                android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -765,7 +796,10 @@ class MainActivity : ComponentActivity() {
             HudDivider(mono, "WAYPOINTS")
             Text("TAP JUMP · NAV+TAP GOTO · HOLD DELETE", fontFamily = mono, fontSize = 9.sp, color = Hud.sub)
             Spacer(Modifier.height(4.dp))
-            for (w in waypointsS.value.sortedBy { it.name.lowercase() }) {
+            val sortedWaypoints = remember(waypointsS.value) {
+                waypointsS.value.sortedBy { it.name.lowercase() }
+            }
+            for (w in sortedWaypoints) {
                 Row(Modifier.fillMaxWidth()
                     .background(Hud.surface)
                     .border(1.dp, Hud.border)

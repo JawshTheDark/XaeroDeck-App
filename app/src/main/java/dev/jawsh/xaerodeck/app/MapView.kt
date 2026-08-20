@@ -28,9 +28,14 @@ class MapView @JvmOverloads constructor(
             onFollowChanged?.invoke(v)
         }
 
+    // These drive drawn state; their setters post an invalidate so the SSE loop
+    // no longer needs an unconditional per-tick full invalidate.
     var waypoints: List<DeckWaypoint> = emptyList()
+        set(v) { field = v; postInvalidateOnAnimation() }
     var entities: List<EntityDot> = emptyList()
+        set(v) { field = v; postInvalidateOnAnimation() }
     var autopilotTarget: DoubleArray? = null
+        set(v) { field = v; postInvalidateOnAnimation() }
     var showPlayers = true
     var showHostiles = true
     var showGrid = false
@@ -46,7 +51,12 @@ class MapView @JvmOverloads constructor(
         strokeWidth = 3f
         color = 0x9066CCFF.toInt()
     }
-    private val trailPath = Path()
+    // Trail path kept in WORLD coordinates; rebuilt only when the trail changes,
+    // then drawn under the world→screen transform (see onDraw).
+    private val trailPathWorld = Path()
+    private var trailLastCount = -1
+    private var trailLastX = Double.NaN
+    private var trailLastZ = Double.NaN
 
     // Smoothed player marker: we lerp the drawn position toward the target.
     var player: PlayerState? = null
@@ -69,9 +79,19 @@ class MapView @JvmOverloads constructor(
     var tileRequester: ((rx: Int, rz: Int) -> Unit)? = null
     var oracleRequester: ((rx: Int, rz: Int) -> Unit)? = null
 
-    private val tileCache = LruCache<String, Bitmap>(160)
+    // Size caches in bytes (by bitmap.byteCount), not entry count, scaled to heap.
+    private val maxMem = Runtime.getRuntime().maxMemory()
+    private val tileCache = object : LruCache<String, Bitmap>(
+        minOf(48L * 1024 * 1024, maxMem / 8).toInt()
+    ) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
     private val missing = HashSet<String>()
-    private val oracleCache = LruCache<String, Bitmap>(80)
+    private val oracleCache = object : LruCache<String, Bitmap>(
+        minOf(16L * 1024 * 1024, maxMem / 16).toInt()
+    ) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
     private val oracleMissing = HashSet<String>()
 
     private val tilePaint = Paint()
@@ -258,21 +278,32 @@ class MapView @JvmOverloads constructor(
             }
         }
 
-        // travel trail
+        // travel trail — world-space path, rebuilt only when the trail changes
         if (showTrail && trail.size > 1) {
-            trailPath.reset()
-            var first = true
-            for (p in trail) {
-                val sx = ((p[0] - left) * scale).toFloat()
-                val sz = ((p[1] - top) * scale).toFloat()
-                if (first) {
-                    trailPath.moveTo(sx, sz)
-                    first = false
-                } else {
-                    trailPath.lineTo(sx, sz)
+            val last = trail[trail.size - 1]
+            if (trail.size != trailLastCount || last[0] != trailLastX || last[1] != trailLastZ) {
+                trailPathWorld.reset()
+                var first = true
+                for (p in trail) {
+                    if (first) {
+                        trailPathWorld.moveTo(p[0].toFloat(), p[1].toFloat())
+                        first = false
+                    } else {
+                        trailPathWorld.lineTo(p[0].toFloat(), p[1].toFloat())
+                    }
                 }
+                trailLastCount = trail.size
+                trailLastX = last[0]; trailLastZ = last[1]
             }
-            canvas.drawPath(trailPath, trailPaint)
+            canvas.save()
+            // world→screen: screen = (world - left/top) * scale
+            canvas.translate((-left * scale).toFloat(), (-top * scale).toFloat())
+            canvas.scale(scale, scale)
+            val savedStroke = trailPaint.strokeWidth
+            trailPaint.strokeWidth = 3f / scale   // keep the line visually ~3px at any zoom
+            canvas.drawPath(trailPathWorld, trailPaint)
+            trailPaint.strokeWidth = savedStroke
+            canvas.restore()
         }
 
         // region / chunk grid

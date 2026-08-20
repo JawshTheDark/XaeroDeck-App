@@ -125,6 +125,13 @@ data class DeckWaypoint(
     val x: Int, val y: Int, val z: Int, val color: Int, val set: String
 )
 
+/** Result of a tile fetch, distinguishing a fresh bitmap from an unchanged (304) tile. */
+sealed class TileResult {
+    data class Loaded(val bitmap: Bitmap) : TileResult()
+    object Unchanged : TileResult()   // 304 / cache still valid — keep whatever is on screen
+    object Missing : TileResult()     // 404 / no cache
+}
+
 class DeckApi(private val baseDir: File) {
     @Volatile
     var baseUrl: String = ""
@@ -132,26 +139,70 @@ class DeckApi(private val baseDir: File) {
     @Volatile
     var token: String = ""
 
-    private fun get(path: String, etag: String? = null): Pair<Int, ByteArray?> {
+    // Response-body size caps: never trust Content-Length, cap the bytes actually read.
+    private val maxJsonBytes = 4 * 1024 * 1024
+    private val maxImageBytes = 32 * 1024 * 1024
+
+    /** Read at most [max] bytes from [stream], returning null if the source exceeds it. */
+    private fun readBounded(stream: java.io.InputStream, max: Int): ByteArray? {
+        val out = java.io.ByteArrayOutputStream()
+        val chunk = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val n = stream.read(chunk)
+            if (n < 0) break
+            total += n
+            if (total > max) return null
+            out.write(chunk, 0, n)
+        }
+        return out.toByteArray()
+    }
+
+    /** Decode server bytes only after a bounds check; reject absurdly large images. */
+    private fun decodeBounded(bytes: ByteArray, rgb565: Boolean): Bitmap? {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        val w = opts.outWidth; val h = opts.outHeight
+        if (w <= 0 || h <= 0) return null
+        if (w > 8192 || h > 8192 || w.toLong() * h > 4096L * 4096L) return null
+        opts.inJustDecodeBounds = false
+        if (rgb565) opts.inPreferredConfig = Bitmap.Config.RGB_565
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    }
+
+    /** Decode a cached PNG file with the same bounds check. */
+    private fun decodeFileBounded(path: String, rgb565: Boolean): Bitmap? {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, opts)
+        val w = opts.outWidth; val h = opts.outHeight
+        if (w <= 0 || h <= 0) return null
+        if (w > 8192 || h > 8192 || w.toLong() * h > 4096L * 4096L) return null
+        opts.inJustDecodeBounds = false
+        if (rgb565) opts.inPreferredConfig = Bitmap.Config.RGB_565
+        return BitmapFactory.decodeFile(path, opts)
+    }
+
+    /**
+     * Low-level GET. [needsToken] gates whether the pairing token is attached — only
+     * control endpoints get it, so a hijacked read-only connection never receives it.
+     * Returns (code, body, etag); body is capped at [maxBytes] and null if exceeded.
+     */
+    private fun get(path: String, etag: String? = null, needsToken: Boolean = false,
+                    maxBytes: Int = maxJsonBytes): Triple<Int, ByteArray?, String?> {
         val conn = URL(baseUrl + path).openConnection() as HttpURLConnection
         conn.connectTimeout = 4000
         conn.readTimeout = 20000
-        if (token.isNotEmpty()) conn.setRequestProperty("X-Deck-Token", token)
+        if (needsToken && token.isNotEmpty()) conn.setRequestProperty("X-Deck-Token", token)
         if (etag != null) conn.setRequestProperty("If-None-Match", etag)
         return try {
             val code = conn.responseCode
-            val body = if (code == 200) conn.inputStream.use { it.readBytes() } else null
-            if (code == 200) {
-                conn.getHeaderField("ETag")?.let { lastEtag = it }
-            }
-            code to body
+            val body = if (code == 200) conn.inputStream.use { readBounded(it, maxBytes) } else null
+            val respEtag = if (code == 200) conn.getHeaderField("ETag") else null
+            Triple(code, body, respEtag)
         } finally {
             conn.disconnect()
         }
     }
-
-    @Volatile
-    private var lastEtag: String? = null
 
     suspend fun status(): Status? = withContext(Dispatchers.IO) {
         try {
@@ -220,13 +271,15 @@ class DeckApi(private val baseDir: File) {
             conn.requestMethod = method
             conn.doOutput = true
             conn.connectTimeout = 4000
+            // waypoint mutations are token-gated by the mod
             if (token.isNotEmpty()) conn.setRequestProperty("X-Deck-Token", token)
             conn.setRequestProperty("Content-Type", "application/json")
             conn.outputStream.use {
                 it.write(body.toString().toByteArray())
             }
-            val ok = conn.responseCode == 200 &&
-                    JSONObject(String(conn.inputStream.use { s -> s.readBytes() })).optBoolean("ok")
+            val resp = if (conn.responseCode == 200)
+                conn.inputStream.use { s -> readBounded(s, maxJsonBytes) } else null
+            val ok = resp != null && JSONObject(String(resp)).optBoolean("ok")
             conn.disconnect()
             ok
         } catch (e: Exception) {
@@ -279,7 +332,7 @@ class DeckApi(private val baseDir: File) {
 
     suspend fun meteorModules(): List<MeteorModule> = withContext(Dispatchers.IO) {
         try {
-            val (code, body) = get("/api/meteor/modules")
+            val (code, body) = get("/api/meteor/modules", needsToken = true)
             if (code != 200 || body == null) return@withContext emptyList()
             val arr = JSONArray(String(body))
             (0 until arr.length()).map { i ->
@@ -300,7 +353,7 @@ class DeckApi(private val baseDir: File) {
     suspend fun meteorSettings(module: String): List<MeteorSetting> = withContext(Dispatchers.IO) {
         try {
             val (code, body) = get("/api/meteor/settings?module=" +
-                    java.net.URLEncoder.encode(module, "UTF-8"))
+                    java.net.URLEncoder.encode(module, "UTF-8"), needsToken = true)
             if (code != 200 || body == null) return@withContext emptyList()
             val arr = JSONArray(String(body))
             val out = ArrayList<MeteorSetting>()
@@ -350,17 +403,18 @@ class DeckApi(private val baseDir: File) {
             ?.optBoolean("ok") == true
     }
 
-    private fun postJson(path: String, body: JSONObject): JSONObject? {
+    private fun postJson(path: String, body: JSONObject, needsToken: Boolean = true): JSONObject? {
         return try {
             val conn = URL(baseUrl + path).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.doOutput = true
             conn.connectTimeout = 4000
-            if (token.isNotEmpty()) conn.setRequestProperty("X-Deck-Token", token)
+            if (needsToken && token.isNotEmpty()) conn.setRequestProperty("X-Deck-Token", token)
             conn.setRequestProperty("Content-Type", "application/json")
             conn.outputStream.use { it.write(body.toString().toByteArray()) }
-            val resp = if (conn.responseCode == 200)
-                JSONObject(String(conn.inputStream.use { it.readBytes() })) else null
+            val bytes = if (conn.responseCode == 200)
+                conn.inputStream.use { readBounded(it, maxJsonBytes) } else null
+            val resp = bytes?.let { JSONObject(String(it)) }
             conn.disconnect()
             resp
         } catch (e: Exception) {
@@ -378,64 +432,73 @@ class DeckApi(private val baseDir: File) {
         return dir
     }
 
-    /** Fetch tile PNG, honoring disk cache + ETag. Returns bitmap or null. */
+    /** Fetch base-map tile PNG, honoring disk cache + per-tile ETag. */
     suspend fun tile(dim: String, rx: Int, rz: Int, forceNetwork: Boolean,
-                     overview: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
-        val dir = worldCacheDir() ?: return@withContext null
+                     overview: Boolean = false): TileResult = withContext(Dispatchers.IO) {
+        val dir = worldCacheDir() ?: return@withContext TileResult.Missing
         val prefix = if (overview) "ov" else "tile"
         val png = File(dir, "${prefix}_${rx}_$rz.png")
         val etagFile = File(dir, "${prefix}_${rx}_$rz.etag")
+        fun cached() = if (png.exists())
+            decodeFileBounded(png.path, true)?.let { TileResult.Loaded(it) } ?: TileResult.Missing
+        else TileResult.Missing
         if (!forceNetwork && png.exists()) {
-            return@withContext BitmapFactory.decodeFile(png.path)
+            return@withContext cached()
         }
         try {
+            // per-tile ETag: read this tile's own .etag file, never a shared field
             val etag = if (png.exists() && etagFile.exists()) etagFile.readText() else null
             val dimPart = if (dim.isEmpty()) "" else "$dim/"
             val ep = if (overview) "overview" else "tile"
-            val (code, body) = get("/api/$ep/$dimPart$rx/$rz.png", etag)
+            val (code, body, respEtag) = get("/api/$ep/$dimPart$rx/$rz.png", etag,
+                needsToken = false, maxBytes = maxImageBytes)
             when {
                 code == 200 && body != null -> {
                     png.writeBytes(body)
-                    lastEtag?.let { etagFile.writeText(it) }
-                    BitmapFactory.decodeByteArray(body, 0, body.size)
+                    respEtag?.let { etagFile.writeText(it) }
+                    decodeBounded(body, true)?.let { TileResult.Loaded(it) } ?: TileResult.Missing
                 }
-                code == 304 -> BitmapFactory.decodeFile(png.path)
-                png.exists() -> BitmapFactory.decodeFile(png.path)
-                else -> null
+                // unchanged: the in-memory bitmap is still valid — skip decode + putTile
+                code == 304 -> TileResult.Unchanged
+                else -> cached()
             }
         } catch (e: Exception) {
-            if (png.exists()) BitmapFactory.decodeFile(png.path) else null
+            cached()
         }
     }
 
     data class OracleLegendEntry(val label: String, val color: Int)
     data class OracleLegend(val enabled: Boolean, val entries: List<OracleLegendEntry>)
 
-    /** Oracle era-overlay tile, same coords/ETag semantics as tile(). */
-    suspend fun oracleTile(dim: String, rx: Int, rz: Int, forceNetwork: Boolean): Bitmap? =
+    /** Oracle era-overlay tile, same coords/ETag semantics as tile(). Keeps ARGB_8888 (has alpha). */
+    suspend fun oracleTile(dim: String, rx: Int, rz: Int, forceNetwork: Boolean): TileResult =
         withContext(Dispatchers.IO) {
-            val dir = worldCacheDir()?.resolve("oracle")?.apply { mkdirs() } ?: return@withContext null
+            val dir = worldCacheDir()?.resolve("oracle")?.apply { mkdirs() }
+                ?: return@withContext TileResult.Missing
             val png = File(dir, "tile_${rx}_$rz.png")
             val etagFile = File(dir, "tile_${rx}_$rz.etag")
+            fun cached() = if (png.exists())
+                decodeFileBounded(png.path, false)?.let { TileResult.Loaded(it) } ?: TileResult.Missing
+            else TileResult.Missing
             if (!forceNetwork && png.exists()) {
-                return@withContext BitmapFactory.decodeFile(png.path)
+                return@withContext cached()
             }
             try {
                 val etag = if (png.exists() && etagFile.exists()) etagFile.readText() else null
                 val dimPart = if (dim.isEmpty()) "" else "$dim/"
-                val (code, body) = get("/api/oracle/tile/$dimPart$rx/$rz.png", etag)
+                val (code, body, respEtag) = get("/api/oracle/tile/$dimPart$rx/$rz.png", etag,
+                    needsToken = false, maxBytes = maxImageBytes)
                 when {
                     code == 200 && body != null -> {
                         png.writeBytes(body)
-                        lastEtag?.let { etagFile.writeText(it) }
-                        BitmapFactory.decodeByteArray(body, 0, body.size)
+                        respEtag?.let { etagFile.writeText(it) }
+                        decodeBounded(body, false)?.let { TileResult.Loaded(it) } ?: TileResult.Missing
                     }
-                    code == 304 -> BitmapFactory.decodeFile(png.path)
-                    png.exists() -> BitmapFactory.decodeFile(png.path)
-                    else -> null
+                    code == 304 -> TileResult.Unchanged
+                    else -> cached()
                 }
             } catch (e: Exception) {
-                if (png.exists()) BitmapFactory.decodeFile(png.path) else null
+                cached()
             }
         }
 
