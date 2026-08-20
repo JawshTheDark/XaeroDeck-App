@@ -55,7 +55,8 @@ data class Status(
     val chat: List<DeckNotification> = emptyList(),
     val dirty: List<DirtyRegion> = emptyList(),
     val effects: List<DeckEffect> = emptyList(),
-    val autopilot: DoubleArray? = null
+    val autopilot: DoubleArray? = null,
+    val meteorRev: Int = 0
 )
 
 private fun parseStatus(o: JSONObject): Status {
@@ -115,7 +116,8 @@ private fun parseStatus(o: JSONObject): Status {
     }
     return Status(o.optBoolean("inGame"), player,
         o.optString("dimension", null), o.optString("worldId", null), ents,
-        notifList("notifications"), stats, notifList("chat"), dirty, effects, autopilot)
+        notifList("notifications"), stats, notifList("chat"), dirty, effects, autopilot,
+        o.optInt("meteorRev", 0))
 }
 
 data class DeckWaypoint(
@@ -403,6 +405,58 @@ class DeckApi(private val baseDir: File) {
             }
         } catch (e: Exception) {
             if (png.exists()) BitmapFactory.decodeFile(png.path) else null
+        }
+    }
+
+    data class OracleLegendEntry(val label: String, val color: Int)
+    data class OracleLegend(val enabled: Boolean, val entries: List<OracleLegendEntry>)
+
+    /** Oracle era-overlay tile, same coords/ETag semantics as tile(). */
+    suspend fun oracleTile(dim: String, rx: Int, rz: Int, forceNetwork: Boolean): Bitmap? =
+        withContext(Dispatchers.IO) {
+            val dir = worldCacheDir()?.resolve("oracle")?.apply { mkdirs() } ?: return@withContext null
+            val png = File(dir, "tile_${rx}_$rz.png")
+            val etagFile = File(dir, "tile_${rx}_$rz.etag")
+            if (!forceNetwork && png.exists()) {
+                return@withContext BitmapFactory.decodeFile(png.path)
+            }
+            try {
+                val etag = if (png.exists() && etagFile.exists()) etagFile.readText() else null
+                val dimPart = if (dim.isEmpty()) "" else "$dim/"
+                val (code, body) = get("/api/oracle/tile/$dimPart$rx/$rz.png", etag)
+                when {
+                    code == 200 && body != null -> {
+                        png.writeBytes(body)
+                        lastEtag?.let { etagFile.writeText(it) }
+                        BitmapFactory.decodeByteArray(body, 0, body.size)
+                    }
+                    code == 304 -> BitmapFactory.decodeFile(png.path)
+                    png.exists() -> BitmapFactory.decodeFile(png.path)
+                    else -> null
+                }
+            } catch (e: Exception) {
+                if (png.exists()) BitmapFactory.decodeFile(png.path) else null
+            }
+        }
+
+    suspend fun oracleLegend(): OracleLegend? = withContext(Dispatchers.IO) {
+        try {
+            val (code, body) = get("/api/oracle/legend")
+            if (code != 200 || body == null) return@withContext null
+            val o = JSONObject(String(body))
+            val entries = ArrayList<OracleLegendEntry>()
+            o.optJSONArray("entries")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val e = arr.getJSONObject(i)
+                    val color = e.optString("color", "").takeIf { it.startsWith("#") }?.let {
+                        try { 0xFF000000.toInt() or it.substring(1).toInt(16) } catch (ex: Exception) { null }
+                    } ?: continue
+                    entries.add(OracleLegendEntry(e.optString("label"), color))
+                }
+            }
+            OracleLegend(o.optBoolean("enabled"), entries)
+        } catch (e: Exception) {
+            null
         }
     }
 }

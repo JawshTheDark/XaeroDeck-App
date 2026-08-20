@@ -35,6 +35,7 @@ class MapView @JvmOverloads constructor(
     var showHostiles = true
     var showGrid = false
     var showTrail = true
+    var showOracle = false
     var trail: MutableList<DoubleArray> = ArrayList() // [x, z] pairs
 
     /** Below this zoom, use 2048-block overview tiles instead of 512-block regions. */
@@ -66,11 +67,15 @@ class MapView @JvmOverloads constructor(
     var onTapBlock: ((x: Int, z: Int) -> Unit)? = null
     var onFollowChanged: ((Boolean) -> Unit)? = null
     var tileRequester: ((rx: Int, rz: Int) -> Unit)? = null
+    var oracleRequester: ((rx: Int, rz: Int) -> Unit)? = null
 
     private val tileCache = LruCache<String, Bitmap>(160)
     private val missing = HashSet<String>()
+    private val oracleCache = LruCache<String, Bitmap>(80)
+    private val oracleMissing = HashSet<String>()
 
     private val tilePaint = Paint()
+    private val oraclePaint = Paint().apply { alpha = 170 }
     private val markerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
@@ -99,18 +104,34 @@ class MapView @JvmOverloads constructor(
     fun tileChanged(rx: Int, rz: Int) {
         missing.remove("t_${rx}_$rz")
         missing.remove("ov_${Math.floorDiv(rx, 4)}_${Math.floorDiv(rz, 4)}")
+        oracleCache.remove("o_${rx}_$rz")
+        oracleMissing.remove("o_${rx}_$rz")
+    }
+
+    fun putOracleTile(rx: Int, rz: Int, bmp: Bitmap?) {
+        val key = "o_${rx}_$rz"
+        if (bmp != null) {
+            oracleCache.put(key, bmp)
+            oracleMissing.remove(key)
+        } else {
+            oracleMissing.add(key)
+        }
+        postInvalidateOnAnimation()
     }
 
     fun clearTiles() {
         tileCache.evictAll()
         missing.clear()
+        oracleCache.evictAll()
+        oracleMissing.clear()
         invalidate()
     }
 
     /** Forget 404s so newly explored regions get re-requested. */
     fun retryMissing() {
-        if (missing.isNotEmpty()) {
+        if (missing.isNotEmpty() || oracleMissing.isNotEmpty()) {
             missing.clear()
+            oracleMissing.clear()
             invalidate()
         }
     }
@@ -193,6 +214,7 @@ class MapView @JvmOverloads constructor(
         val bottom = camZ + halfH / scale
 
         tilePaint.isFilterBitmap = scale < 1f
+        oraclePaint.isFilterBitmap = scale < 1f
 
         val span = if (usingOverview()) 2048 else 512
         val layer = if (usingOverview()) "ov" else "t"
@@ -214,6 +236,25 @@ class MapView @JvmOverloads constructor(
                 canvas.drawBitmap(bmp, null, dst, tilePaint)
             } else if (!missing.contains(key)) {
                 tileRequester?.invoke(rx, rz)
+            }
+        }
+
+        // oracle era overlay — region tiles only, drawn over the base map
+        if (showOracle && !usingOverview()) {
+            for (rx in r0x..r1x) for (rz in r0z..r1z) {
+                val key = "o_${rx}_$rz"
+                val bmp = oracleCache.get(key)
+                if (bmp != null) {
+                    val dst = RectF(
+                        ((rx * span - left) * scale).toFloat(),
+                        ((rz * span - top) * scale).toFloat(),
+                        ((rx * span + span - left) * scale).toFloat(),
+                        ((rz * span + span - top) * scale).toFloat()
+                    )
+                    canvas.drawBitmap(bmp, null, dst, oraclePaint)
+                } else if (!oracleMissing.contains(key)) {
+                    oracleRequester?.invoke(rx, rz)
+                }
             }
         }
 

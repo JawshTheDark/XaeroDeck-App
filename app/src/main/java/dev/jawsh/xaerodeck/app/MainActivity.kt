@@ -5,6 +5,11 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -72,6 +77,21 @@ class MainActivity : ComponentActivity() {
     private val toasts = mutableStateListOf<Pair<Long, AnnotatedString>>()
     private val chatLog = mutableStateListOf<AnnotatedString>()
     private var toastId = 0L
+    private val overlayS = mutableStateOf(false)
+    private val overlayModulesS = mutableStateOf<List<DeckApi.MeteorModule>>(emptyList())
+    private var lastMeteorRev = 0
+    private val showOracleS = mutableStateOf(false)
+    private val oracleLegendS = mutableStateOf<List<DeckApi.OracleLegendEntry>>(emptyList())
+
+    // watchdog
+    private val alertS = mutableStateOf<Pair<String, Boolean>?>(null) // text to sticky
+    private var alertId = 0L
+    private var alertRingtone: android.media.Ringtone? = null
+    private var wdPlayerArmed = true
+    private var wdPlayerLastSeen = 0L
+    private var wdPrevTotems: Int? = null
+    private var wdHpArmed = true
+    private var wdElytraArmed = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,11 +105,15 @@ class MainActivity : ComponentActivity() {
         map.showHostiles = prefs.getBoolean("showHostiles", true)
         map.showGrid = prefs.getBoolean("showGrid", false)
         map.showTrail = prefs.getBoolean("showTrail", true)
+        map.showOracle = prefs.getBoolean("showOracle", false)
+        showOracleS.value = map.showOracle
+        overlayS.value = prefs.getBoolean("meteorOverlay", false)
         if (prefs.getBoolean("keepAwake", true)) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         map.onFollowChanged = { followS.value = it }
         map.tileRequester = { rx, rz -> requestTile(rx, rz, false) }
+        map.oracleRequester = { rx, rz -> requestOracleTile(rx, rz, false) }
         map.waypoints = api.cachedWaypoints()
         waypointsS.value = map.waypoints
         loadTrail()
@@ -122,6 +146,19 @@ class MainActivity : ComponentActivity() {
             tileSemaphore.withPermit {
                 val bmp = api.tile(dim, rx, rz, force, overview)
                 if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, bmp, overview) }
+            }
+            synchronized(pendingTiles) { pendingTiles.remove(key) }
+        }
+    }
+
+    private fun requestOracleTile(rx: Int, rz: Int, force: Boolean) {
+        val key = "${viewedDim}_o_${rx}_$rz"
+        val dim = viewedDim
+        synchronized(pendingTiles) { if (!pendingTiles.add(key)) return }
+        lifecycleScope.launch(Dispatchers.IO) {
+            tileSemaphore.withPermit {
+                val bmp = api.oracleTile(dim, rx, rz, force)
+                if (dim == viewedDim) launch(Dispatchers.Main) { map.putOracleTile(rx, rz, bmp) }
             }
             synchronized(pendingTiles) { pendingTiles.remove(key) }
         }
@@ -193,6 +230,13 @@ class MainActivity : ComponentActivity() {
                 map.player = if (viewingPlayerDim) st.player else null
                 map.entities = if (viewingPlayerDim) st.entities else emptyList()
                 map.autopilotTarget = if (viewingPlayerDim) st.autopilot else null
+                if (st.meteorRev != lastMeteorRev) {
+                    lastMeteorRev = st.meteorRev
+                    if (overlayS.value) lifecycleScope.launch {
+                        overlayModulesS.value = api.meteorModules()
+                    }
+                }
+                watchdog(st)
             } else {
                 map.player = null
             }
@@ -216,6 +260,66 @@ class MainActivity : ComponentActivity() {
             delay(5000)
             toasts.removeAll { it.first == id }
         }
+    }
+
+    private fun watchdog(st: Status) {
+        val prefs = getSharedPreferences("deck", MODE_PRIVATE)
+        if (!prefs.getBoolean("wdEnabled", true)) return
+        val now = System.currentTimeMillis()
+        val players = st.entities.filter { it.type == 'p' }
+        if (players.isNotEmpty()) {
+            if (wdPlayerArmed && prefs.getBoolean("wdPlayer", true)) {
+                wdPlayerArmed = false
+                triggerAlert("PLAYER: ${players.first().name ?: "?"}", sticky = true)
+            }
+            wdPlayerLastSeen = now
+        } else if (!wdPlayerArmed && now - wdPlayerLastSeen >= 10000) {
+            wdPlayerArmed = true
+        }
+        st.stats?.let { s ->
+            wdPrevTotems?.let { prev ->
+                if (s.totems < prev && prefs.getBoolean("wdTotem", true))
+                    triggerAlert("TOTEM POP ×${s.totems}", sticky = false)
+            }
+            wdPrevTotems = s.totems
+            val hpThresh = prefs.getInt("wdHpThresh", 8)
+            if (wdHpArmed && s.hp <= hpThresh && prefs.getBoolean("wdHp", true)) {
+                wdHpArmed = false
+                triggerAlert("HP LOW: %.0f".format(s.hp), sticky = false)
+            } else if (!wdHpArmed && s.hp > hpThresh + 4) {
+                wdHpArmed = true
+            }
+            val elyThresh = prefs.getInt("wdElytraThresh", 15)
+            if (wdElytraArmed && s.elytra in 1..elyThresh && prefs.getBoolean("wdElytra", true)) {
+                wdElytraArmed = false
+                triggerAlert("ELYTRA LOW: ${s.elytra}%", sticky = false)
+            } else if (!wdElytraArmed && s.elytra > elyThresh) {
+                wdElytraArmed = true
+            }
+        }
+    }
+
+    private fun triggerAlert(text: String, sticky: Boolean) {
+        val vib = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+        vib.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 300, 150, 300, 150, 500), -1))
+        try {
+            alertRingtone?.stop()
+            val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+            alertRingtone = android.media.RingtoneManager.getRingtone(this, uri)?.also { it.play() }
+            lifecycleScope.launch { delay(3000); alertRingtone?.stop() }
+        } catch (e: Exception) {
+        }
+        val id = ++alertId
+        alertS.value = text to sticky
+        if (!sticky) lifecycleScope.launch {
+            delay(10000)
+            if (alertId == id) alertS.value = null
+        }
+    }
+
+    private fun dismissAlert() {
+        alertS.value = null
+        try { alertRingtone?.stop() } catch (e: Exception) {}
     }
 
     private fun restartStream() {
@@ -345,6 +449,9 @@ class MainActivity : ComponentActivity() {
         var deleteWp by remember { mutableStateOf<DeckWaypoint?>(null) }
 
         LaunchedEffect(Unit) {
+            if (showOracleS.value && oracleLegendS.value.isEmpty()) {
+                api.oracleLegend()?.takeIf { it.enabled }?.let { oracleLegendS.value = it.entries }
+            }
             map.onLongPressBlock = { x, z ->
                 if (effectiveViewedDim() == playerDim || viewedDim.isEmpty()) {
                     runOnUiThread { addWpAt = x to z }
@@ -401,6 +508,33 @@ class MainActivity : ComponentActivity() {
                         })
                     }
                     HudButton("CHAT") { showChat = true }
+                    HudButton("GUI", active = overlayS.value) {
+                        overlayS.value = !overlayS.value
+                        getSharedPreferences("deck", MODE_PRIVATE).edit()
+                            .putBoolean("meteorOverlay", overlayS.value).apply()
+                    }
+                    HudButton("ERA", active = showOracleS.value) {
+                        if (showOracleS.value) {
+                            showOracleS.value = false
+                            map.showOracle = false
+                            getSharedPreferences("deck", MODE_PRIVATE).edit()
+                                .putBoolean("showOracle", false).apply()
+                            map.invalidate()
+                        } else lifecycleScope.launch {
+                            val legend = api.oracleLegend()
+                            if (legend == null || !legend.enabled) {
+                                android.widget.Toast.makeText(this@MainActivity,
+                                    "oracle not configured on PC", android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                oracleLegendS.value = legend.entries
+                                showOracleS.value = true
+                                map.showOracle = true
+                                getSharedPreferences("deck", MODE_PRIVATE).edit()
+                                    .putBoolean("showOracle", true).apply()
+                                map.invalidate()
+                            }
+                        }
+                    }
                     HudButton("MTR") {
                         val i = Intent(this@MainActivity, MeteorActivity::class.java)
                         i.putExtra("baseUrl", api.baseUrl)
@@ -411,10 +545,20 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Column(Modifier.align(Alignment.BottomEnd).padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalAlignment = Alignment.End) {
+                    if (showOracleS.value && oracleLegendS.value.isNotEmpty()) {
+                        Column(Modifier.background(Color(0xD0100D17)).border(1.dp, Hud.border)
+                            .padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            for (e in oracleLegendS.value) OracleLegendRow(mono, Color(e.color), e.label)
+                            OracleLegendRow(mono, Hud.red, "MODIFIED")
+                        }
+                    }
                     HudButton("+", big = true) { map.scale = (map.scale * 1.5f).coerceIn(0.05f, 16f); map.invalidate() }
                     HudButton("−", big = true) { map.scale = (map.scale / 1.5f).coerceIn(0.05f, 16f); map.invalidate() }
                 }
+
+                if (overlayS.value) MeteorOverlay(mono)
 
                 Row(Modifier.align(Alignment.BottomStart).padding(10.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -461,11 +605,77 @@ class MainActivity : ComponentActivity() {
             }) { deleteWp = null }
         }
 
+        AlertOverlay(mono)
+
         // waypoint delete hook for the panel list
         panelDeleteRequest = { deleteWp = it }
     }
 
     private var panelDeleteRequest: (DeckWaypoint) -> Unit = {}
+
+    @Composable
+    private fun BoxScope.MeteorOverlay(mono: FontFamily) {
+        val conf = androidx.compose.ui.platform.LocalConfiguration.current
+        var category by remember { mutableStateOf("") }
+        val activeColor = remember {
+            Color(getSharedPreferences("deck", MODE_PRIVATE).getInt("activeColor", 0xFF55FF88.toInt()))
+        }
+        LaunchedEffect(Unit) { overlayModulesS.value = api.meteorModules() }
+        Column(Modifier
+            .align(Alignment.TopStart)
+            .padding(start = 10.dp, top = 76.dp)
+            .width(380.dp)
+            .heightIn(max = (conf.screenHeightDp * 0.75f).dp)
+            .background(Color(0xE6100D17))
+            .border(1.dp, Hud.accent)
+            .padding(8.dp)) {
+            val modules = overlayModulesS.value
+            MeteorCategoryTabs(mono, modules, category) { category = it }
+            Spacer(Modifier.height(6.dp))
+            if (modules.isEmpty()) {
+                Text("▚ METEOR NOT REACHABLE\nREMOTE-CONTROL MODULE ON? TOKEN SET?",
+                    fontFamily = mono, fontSize = 12.sp, color = Hud.orange)
+            }
+            val visible = modules
+                .filter { category.isEmpty() || it.category == category }
+                .sortedBy { it.title.lowercase() }
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(visible, key = { it.name }) { m -> MeteorModuleCard(mono, m, activeColor, api) }
+            }
+        }
+    }
+
+    @Composable
+    private fun OracleLegendRow(mono: FontFamily, color: Color, label: String) {
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(12.dp).background(color).border(1.dp, Hud.border))
+            Text(label.uppercase(), fontFamily = mono, fontSize = 11.sp, color = Hud.text)
+        }
+    }
+
+    @Composable
+    private fun AlertOverlay(mono: FontFamily) {
+        val alert = alertS.value ?: return
+        Dialog(onDismissRequest = { dismissAlert() },
+            properties = androidx.compose.ui.window.DialogProperties(
+                usePlatformDefaultWidth = false)) {
+            val pulse by rememberInfiniteTransition(label = "alert").animateFloat(
+                initialValue = 0.2f, targetValue = 0.6f,
+                animationSpec = infiniteRepeatable(tween(450), RepeatMode.Reverse), label = "alert")
+            Box(Modifier
+                .fillMaxSize()
+                .background(Color(1f, 0f, 0f, pulse * 0.45f))
+                .border(8.dp, Color(1f, 0.15f, 0.15f, (pulse + 0.4f).coerceAtMost(1f)))
+                .clickable { dismissAlert() },
+                contentAlignment = Alignment.Center) {
+                Text(alert.first, fontFamily = mono, fontSize = 46.sp, color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(24.dp))
+            }
+        }
+    }
 
     @Composable
     private fun DimChip(label: String, selected: Boolean, onClick: () -> Unit) {
@@ -752,6 +962,24 @@ class MainActivity : ComponentActivity() {
                 SettingSwitch(mono, "KEEP AWAKE", "keepAwake") {
                     if (it) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+                HudDivider(mono, "WATCHDOG")
+                SettingSwitch(mono, "WATCHDOG", "wdEnabled") { }
+                SettingSwitch(mono, "PLAYER ALERT", "wdPlayer") { }
+                SettingSwitch(mono, "TOTEM POP", "wdTotem") { }
+                SettingSwitch(mono, "HP LOW", "wdHp") { }
+                SettingSwitch(mono, "ELYTRA LOW", "wdElytra") { }
+                Spacer(Modifier.height(6.dp))
+                var hpThresh by remember { mutableStateOf(prefs.getInt("wdHpThresh", 8).toString()) }
+                Text("HP THRESHOLD", fontFamily = mono, fontSize = 10.sp, color = Hud.sub)
+                HudTextField(mono, hpThresh, { hpThresh = it }, "8", ImeAction.Done) {
+                    prefs.edit().putInt("wdHpThresh", hpThresh.toIntOrNull() ?: 8).apply()
+                }
+                Spacer(Modifier.height(6.dp))
+                var elyThresh by remember { mutableStateOf(prefs.getInt("wdElytraThresh", 15).toString()) }
+                Text("ELYTRA THRESHOLD %", fontFamily = mono, fontSize = 10.sp, color = Hud.sub)
+                HudTextField(mono, elyThresh, { elyThresh = it }, "15", ImeAction.Done) {
+                    prefs.edit().putInt("wdElytraThresh", elyThresh.toIntOrNull() ?: 15).apply()
                 }
                 Spacer(Modifier.height(12.dp))
                 WideButton(mono, "CLEAR TRAIL") { map.trail.clear(); trailFile()?.delete(); map.invalidate() }
