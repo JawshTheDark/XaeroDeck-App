@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.*
@@ -84,6 +85,7 @@ class MainActivity : ComponentActivity() {
     private val showOracleS = mutableStateOf(false)
     private val oracleLegendS = mutableStateOf<List<DeckApi.OracleLegendEntry>>(emptyList())
     private val showLocS = mutableStateOf(false)
+    private val showLocFilterS = mutableStateOf(false)
 
     // watchdog
     private val alertS = mutableStateOf<Pair<String, Boolean>?>(null) // text to sticky
@@ -121,6 +123,7 @@ class MainActivity : ComponentActivity() {
         map.waypoints = api.cachedWaypoints()
         waypointsS.value = map.waypoints
         loadTrail()
+        loadLocTypes()
 
         setContent { HudScreen() }
         restartStream()
@@ -475,6 +478,53 @@ class MainActivity : ComponentActivity() {
         map.invalidate()
     }
 
+    private fun refreshSlimeSeed() {
+        lifecycleScope.launch {
+            map.slimeSeed = api.oracleGetSeed()?.trim()?.toLongOrNull()
+        }
+    }
+
+    private fun loadLocTypes() {
+        val prefs = getSharedPreferences("deck", MODE_PRIVATE)
+        prefs.getStringSet("locTypes", null)?.let {
+            map.enabledTypes = it.toMutableSet()
+        }
+    }
+
+    @Composable
+    private fun LocFilterDialog(mono: FontFamily, onClose: () -> Unit) {
+        val order = listOf(
+            "stronghold" to "STRONGHOLD", "monument" to "MONUMENT", "mansion" to "MANSION",
+            "village" to "VILLAGE", "outpost" to "OUTPOST", "treasure" to "BURIED TREASURE",
+            "desert_temple" to "DESERT TEMPLE", "jungle_temple" to "JUNGLE TEMPLE",
+            "witch_hut" to "WITCH HUT", "igloo" to "IGLOO", "shipwreck" to "SHIPWRECK",
+            "ocean_ruin" to "OCEAN RUIN", "ruined_portal" to "RUINED PORTAL (OW)",
+            "slime" to "SLIME CHUNKS",
+            "fortress" to "FORTRESS", "bastion" to "BASTION", "ruined_portal_n" to "RUINED PORTAL (NETHER)",
+            "end_city" to "END CITY", "gateway" to "END GATEWAY")
+        HudDialog(mono, "LOC FILTERS", onClose, wide = true, fillHeight = true) {
+            Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
+                for ((key, label) in order) {
+                    var on by remember(key) { mutableStateOf(map.enabledTypes.contains(key)) }
+                    val glyphColor = map.structureStyle[key]?.second ?: 0xFF44D044.toInt()
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(label, fontFamily = mono, fontSize = 13.sp, color = Color(glyphColor))
+                        Switch(checked = on, onCheckedChange = { v ->
+                            on = v
+                            if (v) map.enabledTypes.add(key) else map.enabledTypes.remove(key)
+                            getSharedPreferences("deck", MODE_PRIVATE).edit()
+                                .putStringSet("locTypes", map.enabledTypes.toSet()).apply()
+                            map.invalidate()
+                        }, colors = SwitchDefaults.colors(
+                            checkedThumbColor = Hud.accent, checkedTrackColor = Hud.surfaceHi,
+                            uncheckedThumbColor = Hud.sub, uncheckedTrackColor = Hud.surface))
+                    }
+                }
+            }
+        }
+    }
+
     private fun trailFile(): java.io.File? = api.worldCacheDir()?.resolve("trail.csv")
 
     private fun loadTrail() {
@@ -598,13 +648,26 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    HudButton("LOC", active = showLocS.value) {
-                        showLocS.value = !showLocS.value
-                        map.showStructures = showLocS.value
-                        if (!showLocS.value) map.structures = emptyList()
-                        else log("LOC :: SEED STRUCTURE MARKERS ON")
-                        map.invalidate()
-                    }
+                    Text("LOC", fontFamily = FontFamily.Monospace, fontSize = 17.sp,
+                        color = if (showLocS.value) Hud.onAccent else Hud.accent,
+                        modifier = Modifier
+                            .background(if (showLocS.value) Hud.accent else Hud.surface)
+                            .border(1.dp, if (showLocS.value) Hud.accent else Hud.border)
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        showLocS.value = !showLocS.value
+                                        map.showStructures = showLocS.value
+                                        if (!showLocS.value) map.structures = emptyList()
+                                        else {
+                                            log("LOC ON :: HOLD FOR FILTERS")
+                                            refreshSlimeSeed()
+                                        }
+                                        map.invalidate()
+                                    },
+                                    onLongPress = { showLocFilterS.value = true })
+                            }
+                            .padding(horizontal = 18.dp, vertical = 14.dp))
                     HudButton("MTR") {
                         val i = Intent(this@MainActivity, MeteorActivity::class.java)
                         i.putExtra("baseUrl", api.baseUrl)
@@ -662,6 +725,7 @@ class MainActivity : ComponentActivity() {
             if (panelS.value) SidePanel(mono)
         }
 
+        if (showLocFilterS.value) LocFilterDialog(mono) { showLocFilterS.value = false }
         if (showChat) ChatDialog(mono) { showChat = false }
         if (showSettings) SettingsDialog(mono) { showSettings = false }
         addWpAt?.let { (x, z) -> AddWaypointDialog(mono, x, z) { addWpAt = null } }

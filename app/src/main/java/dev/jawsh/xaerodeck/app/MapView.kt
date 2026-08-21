@@ -40,7 +40,7 @@ class MapView @JvmOverloads constructor(
         set(v) { field = v; postInvalidateOnAnimation() }
     var showStructures = false
 
-    private val structureStyle = mapOf(
+    val structureStyle = mapOf(
         "fortress" to Pair("F", 0xFFE05040.toInt()),
         "bastion" to Pair("B", 0xFFE0A030.toInt()),
         "monument" to Pair("M", 0xFF30C0C0.toInt()),
@@ -48,8 +48,34 @@ class MapView @JvmOverloads constructor(
         "village" to Pair("V", 0xFFC8B078.toInt()),
         "outpost" to Pair("O", 0xFF909090.toInt()),
         "treasure" to Pair("T", 0xFFE8D040.toInt()),
-        "end_city" to Pair("E", 0xFFB060E0.toInt())
+        "end_city" to Pair("E", 0xFFB060E0.toInt()),
+        "desert_temple" to Pair("DT", 0xFFD8C878.toInt()),
+        "jungle_temple" to Pair("JT", 0xFF60A040.toInt()),
+        "witch_hut" to Pair("WH", 0xFF507050.toInt()),
+        "igloo" to Pair("IG", 0xFFD0E8F0.toInt()),
+        "shipwreck" to Pair("SW", 0xFF9A7B4F.toInt()),
+        "ocean_ruin" to Pair("OR", 0xFF48A0A8.toInt()),
+        "ruined_portal" to Pair("RP", 0xFF9060D0.toInt()),
+        "ruined_portal_n" to Pair("RP", 0xFF9060D0.toInt()),
+        "stronghold" to Pair("SH", 0xFFB8E088.toInt()),
+        "gateway" to Pair("EG", 0xFFE060C0.toInt())
     )
+    var enabledTypes: MutableSet<String> = structureStyle.keys.toMutableSet().also { it.add("slime") }
+    var slimeSeed: Long? = null
+
+    private fun isSlimeChunk(seed: Long, cx: Int, cz: Int): Boolean {
+        var s = seed +
+                cx.toLong() * cx * 0x4c1906L + cx.toLong() * 0x5ac0dbL +
+                cz.toLong() * cz * 0x4307a7L + cz.toLong() * 0x5f24fL
+        s = s xor 0x3ad8025fL
+        s = (s xor 0x5DEECE66DL) and ((1L shl 48) - 1)
+        while (true) {
+            s = (s * 0x5DEECE66DL + 0xBL) and ((1L shl 48) - 1)
+            val bits = (s ushr 17).toInt()
+            val v = bits % 10
+            if (bits - v + 9 >= 0) return v == 0
+        }
+    }
     var showPlayers = true
     var showHostiles = true
     var showGrid = false
@@ -377,9 +403,31 @@ class MapView @JvmOverloads constructor(
             if (scale > 0.4f) canvas.drawText(w.name, sx, sz - 16f, textPaint)
         }
 
+        // slime chunks — computed locally from the seed, drawn when zoomed in
+        if (showStructures && enabledTypes.contains("slime") && scale >= 0.7f) {
+            slimeSeed?.let { seed ->
+                val c0x = Math.floorDiv(left.toInt(), 16)
+                val c1x = Math.floorDiv(right.toInt(), 16)
+                val c0z = Math.floorDiv(top.toInt(), 16)
+                val c1z = Math.floorDiv(bottom.toInt(), 16)
+                if ((c1x - c0x) * (c1z - c0z) <= 40000) {
+                    markerPaint.color = 0x4044D044
+                    for (cx in c0x..c1x) for (cz in c0z..c1z) {
+                        if (!isSlimeChunk(seed, cx, cz)) continue
+                        canvas.drawRect(
+                            ((cx * 16 - left) * scale).toFloat(),
+                            ((cz * 16 - top) * scale).toFloat(),
+                            ((cx * 16 + 16 - left) * scale).toFloat(),
+                            ((cz * 16 + 16 - top) * scale).toFloat(), markerPaint)
+                    }
+                }
+            }
+        }
+
         // seed-derived structure markers
         if (showStructures) {
             for (f in structures) {
+                if (!enabledTypes.contains(f.type)) continue
                 val sx = ((f.x - left) * scale).toFloat()
                 val sz = ((f.z - top) * scale).toFloat()
                 if (sx < -30 || sz < -30 || sx > width + 30 || sz > height + 30) continue
