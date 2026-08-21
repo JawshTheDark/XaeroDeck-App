@@ -94,6 +94,8 @@ class MainActivity : ComponentActivity() {
     private var wdPrevTotems: Int? = null
     private var wdHpArmed = true
     private var wdElytraArmed = true
+    private var wdWorldId: String? = null
+    private var wdGraceUntil = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -281,6 +283,19 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("deck", MODE_PRIVATE)
         if (!prefs.getBoolean("wdEnabled", true)) return
         val now = System.currentTimeMillis()
+        // server join / world hop: reset baselines and hold alerts while stats settle
+        if (st.worldId != wdWorldId) {
+            wdWorldId = st.worldId
+            wdPrevTotems = null
+            wdPlayerArmed = true
+            wdHpArmed = true
+            wdElytraArmed = true
+            wdGraceUntil = now + 10000
+        }
+        if (now < wdGraceUntil) {
+            st.stats?.let { wdPrevTotems = it.totems }
+            return
+        }
         val players = st.entities.filter { it.type == 'p' }
         if (players.isNotEmpty()) {
             if (wdPlayerArmed && prefs.getBoolean("wdPlayer", true)) {
