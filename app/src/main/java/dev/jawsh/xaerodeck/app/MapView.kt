@@ -113,6 +113,16 @@ class MapView @JvmOverloads constructor(
     private var drawnZ = 0.0
     private var drawnYaw = 0f
 
+    // fling inertia state (world blocks/sec)
+    private var flingVX = 0.0
+    private var flingVZ = 0.0
+    private var flingLastNanos = 0L
+
+    private fun stopFling() {
+        flingVX = 0.0
+        flingVZ = 0.0
+    }
+
     var onLongPressBlock: ((x: Int, z: Int) -> Unit)? = null
     var onTapBlock: ((x: Int, z: Int) -> Unit)? = null
     var onFollowChanged: ((Boolean) -> Unit)? = null
@@ -220,6 +230,15 @@ class MapView @JvmOverloads constructor(
             return true
         }
 
+        override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+            if (follow) return false
+            flingVX = -vx / scale.toDouble()
+            flingVZ = -vy / scale.toDouble()
+            flingLastNanos = System.nanoTime()
+            postInvalidateOnAnimation()
+            return true
+        }
+
         override fun onLongPress(e: MotionEvent) {
             val wx = camX + (e.x - width / 2f) / scale
             val wz = camZ + (e.y - height / 2f) / scale
@@ -241,12 +260,29 @@ class MapView @JvmOverloads constructor(
     })
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) stopFling()
         scaleDetector.onTouchEvent(event)
         gestures.onTouchEvent(event)
         return true
     }
 
     override fun onDraw(canvas: Canvas) {
+        // fling inertia: glide with exponential decay until slow, cancel on follow
+        if ((flingVX != 0.0 || flingVZ != 0.0)) {
+            if (follow) stopFling()
+            else {
+                val now = System.nanoTime()
+                val dt = ((now - flingLastNanos).coerceIn(0, 100_000_000L)) / 1e9
+                flingLastNanos = now
+                camX += flingVX * dt
+                camZ += flingVZ * dt
+                val decay = Math.exp(-3.5 * dt)
+                flingVX *= decay
+                flingVZ *= decay
+                if (Math.hypot(flingVX, flingVZ) * scale < 12.0) stopFling()
+                else postInvalidateOnAnimation()
+            }
+        }
         canvas.drawColor(0xFF101214.toInt())
         val halfW = width / 2f
         val halfH = height / 2f
