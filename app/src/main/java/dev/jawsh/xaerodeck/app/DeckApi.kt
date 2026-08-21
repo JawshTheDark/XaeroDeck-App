@@ -559,6 +559,27 @@ class DeckApi(private val baseDir: File) {
         }
     }
 
+    data class OracleConfig(val seed: String, val structureVersion: String, val available: List<String>)
+
+    suspend fun oracleConfig(): OracleConfig? = withContext(Dispatchers.IO) {
+        try {
+            val (code, body) = get("/api/oracle/config")
+            if (code != 200 || body == null) return@withContext null
+            val o = JSONObject(String(body))
+            val avail = ArrayList<String>()
+            o.optJSONArray("availableVersions")?.let { arr ->
+                for (i in 0 until arr.length()) avail.add(arr.getString(i))
+            }
+            OracleConfig(o.optString("seed", ""), o.optString("structureVersion", ""), avail)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun oracleSetStructureVersion(version: String): Boolean = withContext(Dispatchers.IO) {
+        postJson("/api/oracle/config", JSONObject().put("structureVersion", version)) != null
+    }
+
     suspend fun oracleSetSeed(seed: String): Boolean = withContext(Dispatchers.IO) {
         postJson("/api/oracle/config", JSONObject().put("seed", seed)) != null
     }

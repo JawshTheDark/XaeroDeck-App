@@ -1222,9 +1222,16 @@ class MainActivity : ComponentActivity() {
         var addr by remember { mutableStateOf(prefs.getString("addr", "") ?: "") }
         var token by remember { mutableStateOf(prefs.getString("token", "") ?: "") }
         var oracleSeed by remember { mutableStateOf("") }
+        var structVer by remember { mutableStateOf("") }
+        var structVersAvail by remember { mutableStateOf(listOf<String>()) }
         var showWorlds by remember { mutableStateOf(false) }
+        var showVerPicker by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) {
-            api.oracleGetSeed()?.let { oracleSeed = it }
+            api.oracleConfig()?.let {
+                oracleSeed = it.seed
+                structVer = it.structureVersion
+                structVersAvail = it.available
+            }
         }
         HudDialog(mono, "CONFIG", onClose, wide = true, fillHeight = true) {
             Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
@@ -1246,6 +1253,9 @@ class MainActivity : ComponentActivity() {
                         if (ok) oracleLegendS.value = emptyList()
                     }
                 }
+                Spacer(Modifier.height(6.dp))
+                WideButton(mono, "STRUCTURE VERSION: " +
+                        (structVer.ifBlank { "AUTO" })) { showVerPicker = true }
                 Spacer(Modifier.height(8.dp))
                 SettingSwitch(mono, "PLAYER RADAR", "showPlayers") { map.showPlayers = it }
                 SettingSwitch(mono, "MOB RADAR", "showHostiles") { map.showHostiles = it }
@@ -1311,6 +1321,33 @@ class MainActivity : ComponentActivity() {
                             showWorlds = false
                             onClose()
                         }.padding(vertical = 6.dp))
+                }
+            }
+        }
+        if (showVerPicker) {
+            HudDialog(mono, "STRUCTURE VERSION", { showVerPicker = false }) {
+                Text("VERSION THE MAP WAS GENERATED ON (CHUNKBASE-STYLE)",
+                    fontFamily = mono, fontSize = 10.sp, color = Hud.sub)
+                Spacer(Modifier.height(6.dp))
+                Column(Modifier.verticalScroll(rememberScrollState()).weight(1f, fill = false)) {
+                    val opts = listOf("") + structVersAvail.reversed()
+                    for (v in opts) {
+                        val label = if (v.isEmpty()) "AUTO (NEWEST ERA)" else v
+                        val sel = v == structVer
+                        Text((if (sel) "◆ " else "  ") + label, fontFamily = mono, fontSize = 13.sp,
+                            color = if (sel) Hud.accent else Hud.text,
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                lifecycleScope.launch {
+                                    val ok = api.oracleSetStructureVersion(v)
+                                    if (ok) {
+                                        structVer = v
+                                        map.structures = emptyList()
+                                        log("STRUCTURE VERSION: $label")
+                                    } else log("VERSION SET FAILED :: TOKEN?")
+                                }
+                                showVerPicker = false
+                            }.padding(vertical = 8.dp))
+                    }
                 }
             }
         }
