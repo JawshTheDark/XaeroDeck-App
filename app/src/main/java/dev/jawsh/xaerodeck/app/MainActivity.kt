@@ -76,6 +76,17 @@ class MainActivity : ComponentActivity() {
     private val etaS = mutableStateOf<String?>(null)
     private var smoothBps = 0.0
     private var walkTarget: DoubleArray? = null
+
+    data class Sighting(val name: String, val x: Int, val z: Int, val dim: String,
+                        val time: Long, val friend: Boolean)
+    private val sightingsS = mutableStateOf<List<Sighting>>(emptyList())
+    private var sightingsWorld: String? = null
+    private var sightingsDirty = false
+
+    // connection-lost watchdog: armed once we've seen the player in a world
+    private var connSeenGame = false
+    private var connLostAt = 0L
+    private var connAlerted = false
     private val panelS = mutableStateOf(true)
     private val logS = mutableStateOf("")
     private val autoAddrS = mutableStateOf("")
@@ -303,14 +314,99 @@ class MainActivity : ComponentActivity() {
                     if (Math.hypot(p.x - t[0], p.z - t[1]) < 6.0) walkTarget = null
                 }
                 etaS.value = computeEta(st)
+                recordSightings(st)
+                connSeenGame = true
+                connLostAt = 0L
+                connAlerted = false
                 watchdog(st)
             } else {
                 map.player = null
                 etaS.value = null
+                if (st == null && connLostAt == 0L) connLostAt = System.currentTimeMillis()
             }
             // No unconditional invalidate here: the player/entities/waypoints/
             // autopilotTarget setters each post an invalidate when their drawn
             // state actually changes, so redraws still track live updates.
+        }
+    }
+
+    /**
+     * Intel journal: every player the radar streams past gets logged per world.
+     * A sighting within 5 min and 500 blocks of that player's last entry counts
+     * as the same encounter and just refreshes it (rate-limited to avoid list
+     * churn while trailing someone); anything else is a new entry.
+     */
+    private fun recordSightings(st: Status) {
+        val wid = st.worldId ?: return
+        if (wid != sightingsWorld) {
+            sightingsWorld = wid
+            sightingsS.value = loadSightings(wid)
+        }
+        val now = System.currentTimeMillis()
+        var list = sightingsS.value
+        var changed = false
+        val dim = st.dimension?.substringAfter(':') ?: "overworld"
+        for (e in st.entities) {
+            if (e.type != 'p' && e.type != 'f') continue
+            val name = e.name ?: continue
+            val last = list.firstOrNull { it.name == name }
+            if (last != null && now - last.time < 300000 &&
+                Math.hypot(e.x - last.x, e.z - last.z) < 500.0) {
+                if (now - last.time >= 30000 || Math.hypot(e.x - last.x, e.z - last.z) >= 32.0) {
+                    list = listOf(last.copy(x = e.x.toInt(), z = e.z.toInt(), dim = dim, time = now)) +
+                            list.filter { it !== last }
+                    changed = true
+                }
+            } else {
+                list = listOf(Sighting(name, e.x.toInt(), e.z.toInt(), dim, now, e.type == 'f')) + list
+                changed = true
+            }
+        }
+        if (changed) {
+            if (list.size > 200) list = list.take(200)
+            sightingsS.value = list
+            sightingsDirty = true
+        }
+    }
+
+    private fun sightingsFile(worldId: String): java.io.File {
+        val dir = java.io.File(filesDir, "sightings").apply { mkdirs() }
+        return java.io.File(dir, worldId.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".json")
+    }
+
+    private fun loadSightings(worldId: String): List<Sighting> = try {
+        val arr = org.json.JSONArray(sightingsFile(worldId).readText())
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            Sighting(o.getString("n"), o.getInt("x"), o.getInt("z"),
+                o.optString("d", "overworld"), o.getLong("t"), o.optBoolean("f"))
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun saveSightings() {
+        val wid = sightingsWorld ?: return
+        if (!sightingsDirty) return
+        sightingsDirty = false
+        try {
+            val arr = org.json.JSONArray()
+            for (s in sightingsS.value) {
+                arr.put(org.json.JSONObject().put("n", s.name).put("x", s.x).put("z", s.z)
+                    .put("d", s.dim).put("t", s.time).put("f", s.friend))
+            }
+            sightingsFile(wid).writeText(arr.toString())
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun ago(t: Long): String {
+        val s = (System.currentTimeMillis() - t) / 1000
+        return when {
+            s < 60 -> "NOW"
+            s < 3600 -> "${s / 60}M"
+            s < 86400 -> "${s / 3600}H"
+            else -> "${s / 86400}D"
         }
     }
 
@@ -346,13 +442,17 @@ class MainActivity : ComponentActivity() {
         }
         val distTxt = if (dist < 1000) "${dist.toInt()}M" else "%.1fKM".format(dist / 1000.0)
         if (smoothBps < 1.5) return "$label --:-- · $distTxt"
-        val s = (dist / smoothBps).toLong()
-        val time = when {
-            s >= 36000 -> ">10H"
-            s >= 3600 -> "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
-            else -> "%d:%02d".format(s / 60, s % 60)
+        fun fmt(sec: Long) = when {
+            sec >= 36000 -> ">10H"
+            sec >= 3600 -> "%d:%02d:%02d".format(sec / 3600, (sec % 3600) / 60, sec % 60)
+            else -> "%d:%02d".format(sec / 60, sec % 60)
         }
-        return "$label $time · $distTxt"
+        val time = fmt((dist / smoothBps).toLong())
+        // long overworld hauls: what the same trip costs through the nether
+        val nether = if (label == "ETA" && dist >= 3000 &&
+            st.dimension == "minecraft:overworld")
+            " · NETHER ${fmt((dist / 8 / smoothBps).toLong())}" else ""
+        return "$label $time · $distTxt$nether"
     }
 
     private fun showNotification(n: DeckNotification) {
@@ -477,6 +577,14 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             var tick = 0
             while (true) {
+                if (connSeenGame && !connAlerted && connLostAt > 0 &&
+                    System.currentTimeMillis() - connLostAt > 12000) {
+                    connAlerted = true
+                    val prefs = getSharedPreferences("deck", MODE_PRIVATE)
+                    if (prefs.getBoolean("wdEnabled", true) && prefs.getBoolean("wdConn", true))
+                        triggerAlert("⚠ CONNECTION LOST", sticky = true)
+                }
+                if (tick % 30 == 7) saveSightings()
                 if (api.baseUrl.isNotEmpty() && lastStatus?.inGame == true && browsingS.value == null) {
                     if (tick % 10 == 0) refreshWaypoints()
                     if (tick % 15 == 0) dimsS.value = api.dimensions()
@@ -670,6 +778,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         saveTrail()
+        saveSightings()
     }
 
     // ---------- UI ----------
@@ -1132,11 +1241,48 @@ class MainActivity : ComponentActivity() {
                     Text("◆ ${w.name}  ${w.x} ${w.z}", fontFamily = mono, fontSize = 15.sp,
                         color = Color(0xFF000000.toInt() or w.color),
                         modifier = Modifier.weight(1f).padding(vertical = 12.dp))
+                    when (st?.dimension) {
+                        "minecraft:overworld" -> "N ${w.x / 8} ${w.z / 8}"
+                        "minecraft:the_nether" -> "OW ${w.x * 8} ${w.z * 8}"
+                        else -> null
+                    }?.let {
+                        Text(it, fontFamily = mono, fontSize = 10.sp, color = Hud.green)
+                    }
                     Text("✕", fontFamily = mono, fontSize = 18.sp, color = Hud.sub,
                         modifier = Modifier.clickable { panelDeleteRequest(w) }
                             .padding(horizontal = 16.dp, vertical = 12.dp))
                 }
                 Spacer(Modifier.height(4.dp))
+            }
+
+            if (sightingsS.value.isNotEmpty()) {
+                HudDivider(mono, "SIGHTINGS")
+                Text("PLAYERS SEEN ON RADAR · TAP TO VIEW", fontFamily = mono, fontSize = 9.sp, color = Hud.sub)
+                Spacer(Modifier.height(4.dp))
+                for (s in sightingsS.value.take(30)) {
+                    Row(Modifier.fillMaxWidth()
+                        .clickable {
+                            map.follow = false
+                            if (s.dim != effectiveViewedDim()?.substringAfter(':')) switchDim(s.dim)
+                            map.centerOn(s.x.toDouble(), s.z.toDouble())
+                        }
+                        .padding(vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text((if (s.friend) "✦ " else "☠ ") + s.name,
+                            fontFamily = mono, fontSize = 13.sp,
+                            color = if (s.friend) Hud.green else Hud.red,
+                            modifier = Modifier.weight(1f))
+                        Text("${s.x} ${s.z}", fontFamily = mono, fontSize = 12.sp, color = Hud.text)
+                        Text("  ${ago(s.time)}", fontFamily = mono, fontSize = 11.sp, color = Hud.sub)
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text("✕ CLEAR LOG", fontFamily = mono, fontSize = 10.sp, color = Hud.sub,
+                    modifier = Modifier.clickable {
+                        sightingsS.value = emptyList()
+                        sightingsDirty = true
+                        saveSightings()
+                    }.padding(vertical = 6.dp))
             }
         }
     }
@@ -1335,6 +1481,7 @@ class MainActivity : ComponentActivity() {
                 }
                 HudDivider(mono, "WATCHDOG")
                 SettingSwitch(mono, "WATCHDOG", "wdEnabled") { }
+                SettingSwitch(mono, "CONNECTION LOST", "wdConn") { }
                 SettingSwitch(mono, "PLAYER ALERT", "wdPlayer") { }
                 SettingSwitch(mono, "TOTEM POP", "wdTotem") { }
                 SettingSwitch(mono, "HP LOW", "wdHp") { }
