@@ -269,8 +269,8 @@ class MapView @JvmOverloads constructor(
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(d: ScaleGestureDetector): Boolean {
                 if (shapeMode == "ellipse") {
-                    shRx = Math.max(120.0, shRx * d.scaleFactor)
-                    shRz = Math.max(120.0, shRz * d.scaleFactor)
+                    shRx = Math.max(16.0, shRx * d.scaleFactor)
+                    shRz = Math.max(16.0, shRz * d.scaleFactor)
                     invalidate()
                     return true
                 }
@@ -320,8 +320,8 @@ class MapView @JvmOverloads constructor(
             if (shapeMode != null && dragTarget != 0) {
                 when (dragTarget) {
                     1 -> { shCx -= dx / scale; shCz -= dy / scale }
-                    2, 3 -> shRx = Math.max(120.0, shRx + (if (dragTarget == 2) -dx else dx) / scale)
-                    4, 5 -> shRz = Math.max(120.0, shRz + (if (dragTarget == 4) -dy else dy) / scale)
+                    2, 3 -> shRx = Math.max(16.0, shRx + (if (dragTarget == 2) -dx else dx) / scale)
+                    4, 5 -> shRz = Math.max(16.0, shRz + (if (dragTarget == 4) -dy else dy) / scale)
                 }
                 invalidate()
                 return true
