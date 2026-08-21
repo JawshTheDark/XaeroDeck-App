@@ -975,7 +975,11 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("deck", MODE_PRIVATE)
         var addr by remember { mutableStateOf(prefs.getString("addr", "") ?: "") }
         var token by remember { mutableStateOf(prefs.getString("token", "") ?: "") }
+        var oracleSeed by remember { mutableStateOf("") }
         var showWorlds by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            api.oracleGetSeed()?.let { oracleSeed = it }
+        }
         HudDialog(mono, "CONFIG", onClose, wide = true, fillHeight = true) {
             Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
                 HudTextField(mono, addr, { addr = it }, "PC IP (EMPTY = AUTO-DISCOVER)", ImeAction.Done) {
@@ -986,6 +990,15 @@ class MainActivity : ComponentActivity() {
                 HudTextField(mono, token, { token = it }, "PAIRING TOKEN", ImeAction.Done) {
                     prefs.edit().putString("token", token.trim()).apply()
                     api.token = token.trim()
+                }
+                Spacer(Modifier.height(6.dp))
+                HudTextField(mono, oracleSeed, { oracleSeed = it },
+                    "ORACLE SEED (WORLD SEED, EMPTY = OFF)", ImeAction.Done) {
+                    lifecycleScope.launch {
+                        val ok = api.oracleSetSeed(oracleSeed.trim())
+                        log(if (ok) "ORACLE SEED SET" else "SEED SET FAILED :: TOKEN?")
+                        if (ok) oracleLegendS.value = emptyList()
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
                 SettingSwitch(mono, "PLAYER RADAR", "showPlayers") { map.showPlayers = it }

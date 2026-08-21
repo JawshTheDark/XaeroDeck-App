@@ -502,6 +502,19 @@ class DeckApi(private val baseDir: File) {
             }
         }
 
+    suspend fun oracleGetSeed(): String? = withContext(Dispatchers.IO) {
+        try {
+            val (code, body) = get("/api/oracle/config")
+            if (code != 200 || body == null) null else JSONObject(String(body)).optString("seed", "")
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun oracleSetSeed(seed: String): Boolean = withContext(Dispatchers.IO) {
+        postJson("/api/oracle/config", JSONObject().put("seed", seed)) != null
+    }
+
     suspend fun oracleLegend(): OracleLegend? = withContext(Dispatchers.IO) {
         try {
             val (code, body) = get("/api/oracle/legend")
