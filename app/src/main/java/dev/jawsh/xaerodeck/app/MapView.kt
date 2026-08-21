@@ -36,6 +36,9 @@ class MapView @JvmOverloads constructor(
         set(v) { field = v; postInvalidateOnAnimation() }
     var autopilotTarget: DoubleArray? = null
         set(v) { field = v; postInvalidateOnAnimation() }
+    var routeDraft: MutableList<DoubleArray> = ArrayList()
+    var activeRoute: Triple<List<DoubleArray>, Int, Boolean>? = null
+        set(v) { field = v; postInvalidateOnAnimation() }
     var structures: List<DeckApi.SeedFeature> = emptyList()
         set(v) { field = v; postInvalidateOnAnimation() }
     var showStructures = false
@@ -483,6 +486,35 @@ class MapView @JvmOverloads constructor(
             }
         }
 
+        // route rendering: draft (cyan, dashed feel) and active (pink)
+        fun drawRoute(pts: List<DoubleArray>, color: Int, closed: Boolean, fromIdx: Int) {
+            if (pts.isEmpty()) return
+            markerPaint.color = color
+            markerPaint.style = Paint.Style.STROKE
+            markerPaint.strokeWidth = 3f
+            var px = 0f; var pz = 0f
+            for ((i, p) in pts.withIndex()) {
+                val sx = ((p[0] - left) * scale).toFloat()
+                val sz = ((p[1] - top) * scale).toFloat()
+                if (i > 0) canvas.drawLine(px, pz, sx, sz, markerPaint)
+                px = sx; pz = sz
+            }
+            if (closed && pts.size > 2) {
+                val s0x = ((pts[0][0] - left) * scale).toFloat()
+                val s0z = ((pts[0][1] - top) * scale).toFloat()
+                canvas.drawLine(px, pz, s0x, s0z, markerPaint)
+            }
+            markerPaint.style = Paint.Style.FILL
+            for ((i, p) in pts.withIndex()) {
+                val sx = ((p[0] - left) * scale).toFloat()
+                val sz = ((p[1] - top) * scale).toFloat()
+                markerPaint.color = if (i == fromIdx) 0xFFFFFFFF.toInt() else color
+                canvas.drawCircle(sx, sz, if (i == fromIdx) 9f else 6f, markerPaint)
+            }
+        }
+        if (routeDraft.isNotEmpty()) drawRoute(routeDraft, 0xFF66DDFF.toInt(), false, -1)
+        activeRoute?.let { (pts, idx, loop) -> drawRoute(pts, 0xFFFF79C6.toInt(), loop, idx) }
+
         // autopilot target + course line
         autopilotTarget?.let { t ->
             val tx = ((t[0] - left) * scale).toFloat()
@@ -533,6 +565,9 @@ class MapView @JvmOverloads constructor(
         setShadowLayer(4f, 0f, 0f, Color.BLACK)
     }
 
+    /** Push the W marker right so it clears the left-side button rail. */
+    var compassWestInsetPx = 0f
+
     /** N/S/E/W edge labels — map is always north-up. */
     private fun drawCompass(canvas: Canvas) {
         val cx = width / 2f
@@ -546,8 +581,8 @@ class MapView @JvmOverloads constructor(
         canvas.drawText("S", cx, height - inset + 12f, compassText)
         canvas.drawCircle(width - inset, cy, 26f, compassBg)
         canvas.drawText("E", width - inset, cy + 12f, compassText)
-        canvas.drawCircle(inset, cy, 26f, compassBg)
-        canvas.drawText("W", inset, cy + 12f, compassText)
+        canvas.drawCircle(inset + compassWestInsetPx, cy, 26f, compassBg)
+        canvas.drawText("W", inset + compassWestInsetPx, cy + 12f, compassText)
     }
 
     private fun drawArrow(canvas: Canvas, sx: Float, sz: Float, yaw: Float) {

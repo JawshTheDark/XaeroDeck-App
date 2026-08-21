@@ -86,6 +86,8 @@ class MainActivity : ComponentActivity() {
     private val oracleLegendS = mutableStateOf<List<DeckApi.OracleLegendEntry>>(emptyList())
     private val showLocS = mutableStateOf(false)
     private val showLocFilterS = mutableStateOf(false)
+    private val routeEditS = mutableStateOf(false)
+    private val routeLenS = mutableStateOf(0)
 
     // watchdog
     private val alertS = mutableStateOf<Pair<String, Boolean>?>(null) // text to sticky
@@ -248,6 +250,7 @@ class MainActivity : ComponentActivity() {
                 map.player = if (viewingPlayerDim) st.player else null
                 map.entities = if (viewingPlayerDim) st.entities else emptyList()
                 map.autopilotTarget = if (viewingPlayerDim) st.autopilot else null
+                map.activeRoute = if (viewingPlayerDim) st.route else null
                 if (st.meteorRev != lastMeteorRev) {
                     lastMeteorRev = st.meteorRev
                     if (overlayS.value) lifecycleScope.launch {
@@ -478,6 +481,31 @@ class MainActivity : ComponentActivity() {
         map.invalidate()
     }
 
+    private fun exitRouteEdit() {
+        routeEditS.value = false
+        map.routeDraft.clear()
+        routeLenS.value = 0
+        map.compassWestInsetPx = 0f
+        map.invalidate()
+    }
+
+    private fun sendRoute(loop: Boolean) {
+        val pts = map.routeDraft.toList()
+        if (pts.isEmpty()) {
+            log("NO POINTS :: TAP THE MAP FIRST")
+            return
+        }
+        lifecycleScope.launch {
+            val ok = api.autopilotRoute(pts, loop)
+            log(when {
+                !ok -> "ROUTE FAILED :: DECK-AUTOPILOT ON? TOKEN?"
+                loop -> "✈ ROUTE ∞ :: ${pts.size} POINTS, LOOPING"
+                else -> "✈ ROUTE :: ${pts.size} POINTS"
+            })
+            if (ok) exitRouteEdit()
+        }
+    }
+
     private fun refreshSlimeSeed() {
         lifecycleScope.launch {
             map.slimeSeed = api.oracleGetSeed()?.trim()?.toLongOrNull()
@@ -571,7 +599,11 @@ class MainActivity : ComponentActivity() {
                 } else log("WAYPOINTS ONLY IN CURRENT DIM")
             }
             map.onTapBlock = { x, z ->
-                if (navModeS.value > 0) {
+                if (routeEditS.value) {
+                    map.routeDraft.add(doubleArrayOf(x.toDouble(), z.toDouble()))
+                    routeLenS.value = map.routeDraft.size
+                    map.invalidate()
+                } else if (navModeS.value > 0) {
                     val snap = 28f / map.scale
                     val t = map.waypoints.minByOrNull {
                         val dx = it.x - x.toDouble(); val dz = it.z - z.toDouble(); dx * dx + dz * dz
@@ -668,6 +700,15 @@ class MainActivity : ComponentActivity() {
                                     onLongPress = { showLocFilterS.value = true })
                             }
                             .padding(horizontal = 18.dp, vertical = 14.dp))
+                    HudButton("RTE", active = routeEditS.value) {
+                        routeEditS.value = !routeEditS.value
+                        if (routeEditS.value) {
+                            map.follow = false
+                            map.compassWestInsetPx = resources.displayMetrics.density * 110
+                            log("ROUTE :: TAP POINTS · GO=FLY · GO∞=LOOP · SPIRAL/AREA=PATTERNS")
+                        } else exitRouteEdit()
+                        map.invalidate()
+                    }
                     HudButton("MTR") {
                         val i = Intent(this@MainActivity, MeteorActivity::class.java)
                         i.putExtra("baseUrl", api.baseUrl)
@@ -704,22 +745,59 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Column(Modifier.align(Alignment.BottomCenter).padding(bottom = 60.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally) {
-                    for ((_, t) in toasts) {
-                        Text(t, fontFamily = mono, fontSize = 17.sp,
-                            modifier = Modifier.background(Color(0xF0100D17))
-                                .border(1.dp, Hud.accent)
-                                .padding(horizontal = 18.dp, vertical = 12.dp))
+                if (routeEditS.value) {
+                    Column(Modifier.align(Alignment.CenterStart).padding(start = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("ROUTE ${routeLenS.value}", fontFamily = mono, fontSize = 12.sp,
+                            color = Hud.cyan,
+                            modifier = Modifier.background(Color(0xE0100D17)).padding(6.dp))
+                        HudButton("GO") { sendRoute(loop = false) }
+                        HudButton("GO ∞") { sendRoute(loop = true) }
+                        HudButton("SPIRAL") {
+                            lifecycleScope.launch {
+                                val ok = api.autopilotSpiral(map.camX.toInt(), map.camZ.toInt(), 160, 8)
+                                log(if (ok) "✈ SPIRAL FROM ${map.camX.toInt()} ${map.camZ.toInt()}"
+                                else "SPIRAL FAILED :: DECK-AUTOPILOT ON?")
+                                exitRouteEdit()
+                            }
+                        }
+                        HudButton("AREA") {
+                            val hw = map.width / 2f / map.scale
+                            val hh = map.height / 2f / map.scale
+                            lifecycleScope.launch {
+                                val ok = api.autopilotArea(
+                                    (map.camX - hw).toInt(), (map.camZ - hh).toInt(),
+                                    (map.camX + hw).toInt(), (map.camZ + hh).toInt(), 160)
+                                log(if (ok) "✈ AUTOMAP VISIBLE AREA" else "AREA FAILED :: DECK-AUTOPILOT ON?")
+                                exitRouteEdit()
+                            }
+                        }
+                        HudButton("CLR") {
+                            map.routeDraft.clear()
+                            routeLenS.value = 0
+                            map.invalidate()
+                        }
+                        HudButton("✕ EXIT") { exitRouteEdit() }
                     }
                 }
 
-                if (logS.value.isNotEmpty()) {
-                    Text(logS.value, fontFamily = mono, fontSize = 11.sp, color = Hud.accent,
-                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp)
-                            .background(Color(0xE0100D17)).padding(horizontal = 10.dp, vertical = 4.dp))
+                Column(Modifier.align(Alignment.TopCenter).padding(top = 78.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    for ((_, t) in toasts) {
+                        Text(t, fontFamily = mono, fontSize = 22.sp,
+                            modifier = Modifier.background(Color(0xF0100D17))
+                                .border(1.dp, Hud.accent)
+                                .padding(horizontal = 26.dp, vertical = 16.dp))
+                    }
+                    if (logS.value.isNotEmpty()) {
+                        Text(logS.value, fontFamily = mono, fontSize = 15.sp, color = Hud.accent,
+                            modifier = Modifier.background(Color(0xE0100D17))
+                                .padding(horizontal = 14.dp, vertical = 8.dp))
+                    }
                 }
+
+
             }
 
             if (panelS.value) SidePanel(mono)

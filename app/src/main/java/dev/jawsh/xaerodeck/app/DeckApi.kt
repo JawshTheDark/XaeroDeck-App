@@ -56,6 +56,7 @@ data class Status(
     val dirty: List<DirtyRegion> = emptyList(),
     val effects: List<DeckEffect> = emptyList(),
     val autopilot: DoubleArray? = null,
+    val route: Triple<List<DoubleArray>, Int, Boolean>? = null,
     val meteorRev: Int = 0
 )
 
@@ -111,12 +112,18 @@ private fun parseStatus(o: JSONObject): Status {
             effects.add(DeckEffect(e.optString("n"), e.optInt("s"), e.optInt("c")))
         }
     }
-    val autopilot = o.optJSONObject("autopilot")?.let {
-        doubleArrayOf(it.optDouble("x"), it.optDouble("z"))
+    val apObj = o.optJSONObject("autopilot")
+    val autopilot = apObj?.let { doubleArrayOf(it.optDouble("x"), it.optDouble("z")) }
+    val route = apObj?.optJSONArray("route")?.let { ra ->
+        val pts = (0 until ra.length()).map { i ->
+            val p = ra.getJSONArray(i)
+            doubleArrayOf(p.getDouble(0), p.getDouble(1))
+        }
+        Triple(pts, apObj.optInt("i", 0), apObj.optBoolean("loop", false))
     }
     return Status(o.optBoolean("inGame"), player,
         o.optString("dimension", null), o.optString("worldId", null), ents,
-        notifList("notifications"), stats, notifList("chat"), dirty, effects, autopilot,
+        notifList("notifications"), stats, notifList("chat"), dirty, effects, autopilot, route,
         o.optInt("meteorRev", 0))
 }
 
@@ -397,6 +404,28 @@ class DeckApi(private val baseDir: File) {
     suspend fun baritoneCancel(): Boolean = withContext(Dispatchers.IO) {
         postJson("/api/baritone", JSONObject().put("action", "cancel"))?.optBoolean("ok") == true
     }
+
+    suspend fun autopilotRoute(points: List<DoubleArray>, loop: Boolean): Boolean =
+        withContext(Dispatchers.IO) {
+            val arr = JSONArray()
+            for (p in points) arr.put(JSONArray().put(p[0].toInt()).put(p[1].toInt()))
+            postJson("/api/baritone", JSONObject().put("action", "route")
+                .put("points", arr).put("loop", loop))?.optBoolean("ok") == true
+        }
+
+    suspend fun autopilotSpiral(x: Int, z: Int, spacing: Int, loops: Int): Boolean =
+        withContext(Dispatchers.IO) {
+            postJson("/api/baritone", JSONObject().put("action", "spiral")
+                .put("x", x).put("z", z).put("spacing", spacing).put("loops", loops))
+                ?.optBoolean("ok") == true
+        }
+
+    suspend fun autopilotArea(x0: Int, z0: Int, x1: Int, z1: Int, spacing: Int): Boolean =
+        withContext(Dispatchers.IO) {
+            postJson("/api/baritone", JSONObject().put("action", "area")
+                .put("x0", x0).put("z0", z0).put("x1", x1).put("z1", z1)
+                .put("spacing", spacing))?.optBoolean("ok") == true
+        }
 
     suspend fun autopilotFly(x: Int, z: Int): Boolean = withContext(Dispatchers.IO) {
         postJson("/api/baritone", JSONObject().put("action", "flyto").put("x", x).put("z", z))
