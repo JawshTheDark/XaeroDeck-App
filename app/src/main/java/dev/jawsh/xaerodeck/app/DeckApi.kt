@@ -463,9 +463,9 @@ class DeckApi(private val baseDir: File) {
 
     /** Fetch base-map tile PNG, honoring disk cache + per-tile ETag. */
     suspend fun tile(dim: String, rx: Int, rz: Int, forceNetwork: Boolean,
-                     overview: Boolean = false): TileResult = withContext(Dispatchers.IO) {
+                     level: Int = 0): TileResult = withContext(Dispatchers.IO) {
         val dir = worldCacheDir() ?: return@withContext TileResult.Missing
-        val prefix = if (overview) "ov" else "tile"
+        val prefix = when (level) { 1 -> "ov"; 2 -> "ov2"; else -> "tile" }
         val png = File(dir, "${prefix}_${rx}_$rz.png")
         val etagFile = File(dir, "${prefix}_${rx}_$rz.etag")
         fun cached() = if (png.exists())
@@ -478,7 +478,7 @@ class DeckApi(private val baseDir: File) {
             // per-tile ETag: read this tile's own .etag file, never a shared field
             val etag = if (png.exists() && etagFile.exists()) etagFile.readText() else null
             val dimPart = if (dim.isEmpty()) "" else "$dim/"
-            val ep = if (overview) "overview" else "tile"
+            val ep = when (level) { 1 -> "overview"; 2 -> "overview2"; else -> "tile" }
             val (code, body, respEtag) = get("/api/$ep/$dimPart$rx/$rz.png", etag,
                 needsToken = false, maxBytes = maxImageBytes)
             when {

@@ -102,6 +102,30 @@ class MainActivity : ComponentActivity() {
     private var wdWorldId: String? = null
     private var wdGraceUntil = 0L
 
+    private val soundPicker = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { res ->
+        @Suppress("DEPRECATION")
+        val uri: android.net.Uri? = res.data?.getParcelableExtra(
+            android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        getSharedPreferences("deck", MODE_PRIVATE).edit()
+            .putString("alertSound", uri?.toString() ?: "").apply()
+        log(if (uri != null) "ALERT SOUND SET" else "ALERT SOUND: SILENT")
+    }
+
+    private fun pickAlertSound() {
+        val cur = getSharedPreferences("deck", MODE_PRIVATE).getString("alertSound", null)
+        val intent = android.content.Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
+                android.media.RingtoneManager.TYPE_ALL)
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, "XaeroDeck alert sound")
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+                cur?.takeIf { it.isNotEmpty() }?.let(android.net.Uri::parse))
+        }
+        soundPicker.launch(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         api = DeckApi(filesDir)
@@ -148,18 +172,18 @@ class MainActivity : ComponentActivity() {
         logS.value = msg
     }
 
-    private fun requestTile(rx: Int, rz: Int, force: Boolean, overview: Boolean = map.usingOverview()) {
-        val key = "${viewedDim}_${if (overview) "ov" else "t"}_${rx}_$rz"
+    private fun requestTile(rx: Int, rz: Int, force: Boolean, level: Int = map.tileLevel()) {
+        val key = "${viewedDim}_${map.levelPrefix(level)}_${rx}_$rz"
         val dim = viewedDim
         synchronized(pendingTiles) { if (!pendingTiles.add(key)) return }
         lifecycleScope.launch(Dispatchers.IO) {
             tileSemaphore.withPermit {
                 // Unchanged (304) leaves the existing cached bitmap untouched — no putTile.
-                when (val res = api.tile(dim, rx, rz, force, overview)) {
+                when (val res = api.tile(dim, rx, rz, force, level)) {
                     is TileResult.Loaded ->
-                        if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, res.bitmap, overview) }
+                        if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, res.bitmap, level) }
                     is TileResult.Missing ->
-                        if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, null, overview) }
+                        if (dim == viewedDim) launch(Dispatchers.Main) { map.putTile(rx, rz, null, level) }
                     is TileResult.Unchanged -> {}
                 }
             }
@@ -236,9 +260,19 @@ class MainActivity : ComponentActivity() {
                         st.dimension?.endsWith(d.dim) == true else viewedDim == d.dim
                     if (dimMatch) {
                         map.tileChanged(d.x, d.z)
-                        if (map.usingOverview())
-                            requestTile(Math.floorDiv(d.x, 4), Math.floorDiv(d.z, 4), true, true)
-                        else requestTile(d.x, d.z, true, false)
+                        val lvl = map.tileLevel()
+                        if (lvl > 0) {
+                            val div = if (lvl == 1) 4 else 8
+                            val ox = Math.floorDiv(d.x, div); val oz = Math.floorDiv(d.z, div)
+                            val k = "${lvl}_${ox}_$oz"
+                            val now = System.currentTimeMillis()
+                            if (now - (lastOverviewReq[k] ?: 0) > 3000) {
+                                lastOverviewReq[k] = now
+                                requestTile(ox, oz, force = true, level = lvl)
+                            }
+                        } else {
+                            requestTile(d.x, d.z, force = true, level = 0)
+                        }
                     }
                 }
                 val p = st.player
@@ -341,8 +375,13 @@ class MainActivity : ComponentActivity() {
         vib.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 300, 150, 300, 150, 500), -1))
         try {
             alertRingtone?.stop()
-            val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
-            alertRingtone = android.media.RingtoneManager.getRingtone(this, uri)?.also { it.play() }
+            val pref = getSharedPreferences("deck", MODE_PRIVATE).getString("alertSound", null)
+            val uri = when {
+                pref == "" -> null // user chose silent
+                pref != null -> android.net.Uri.parse(pref)
+                else -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+            }
+            alertRingtone = uri?.let { android.media.RingtoneManager.getRingtone(this, it) }?.also { it.play() }
             lifecycleScope.launch { delay(3000); alertRingtone?.stop() }
         } catch (e: Exception) {
         }
@@ -409,7 +448,7 @@ class MainActivity : ComponentActivity() {
                         map.player?.let { p ->
                             val prx = Math.floorDiv(p.x.toInt(), 512)
                             val prz = Math.floorDiv(p.z.toInt(), 512)
-                            for (dx in -1..1) for (dz in -1..1) requestTile(prx + dx, prz + dz, true, false)
+                            for (dx in -1..1) for (dz in -1..1) requestTile(prx + dx, prz + dz, true, 0)
                         }
                     }
                     if (tick % 5 == 1) for ((rx, rz) in map.visibleRegions()) requestTile(rx, rz, true)
@@ -729,8 +768,8 @@ class MainActivity : ComponentActivity() {
                             OracleLegendRow(mono, Hud.red, "MODIFIED")
                         }
                     }
-                    HudButton("+", big = true) { map.scale = (map.scale * 1.5f).coerceIn(0.09f, 16f); map.invalidate() }
-                    HudButton("−", big = true) { map.scale = (map.scale / 1.5f).coerceIn(0.09f, 16f); map.invalidate() }
+                    HudButton("+", big = true) { map.scale = (map.scale * 1.5f).coerceIn(0.03f, 16f); map.invalidate() }
+                    HudButton("−", big = true) { map.scale = (map.scale / 1.5f).coerceIn(0.03f, 16f); map.invalidate() }
                 }
 
                 if (overlayS.value) MeteorOverlay(mono)
@@ -1219,6 +1258,10 @@ class MainActivity : ComponentActivity() {
                 }
                 Spacer(Modifier.height(6.dp))
                 WideButton(mono, "BROWSE CACHED WORLDS") { showWorlds = true }
+                Spacer(Modifier.height(6.dp))
+                WideButton(mono, "ALERT SOUND…") { pickAlertSound() }
+                Spacer(Modifier.height(6.dp))
+                WideButton(mono, "TEST ALERT") { triggerAlert("TEST ALERT", sticky = false) }
                 Spacer(Modifier.height(6.dp))
             }
         }

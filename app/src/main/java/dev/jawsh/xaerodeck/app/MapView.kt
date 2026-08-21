@@ -88,7 +88,14 @@ class MapView @JvmOverloads constructor(
 
     /** Below this zoom, use 2048-block overview tiles instead of 512-block regions. */
     val overviewThreshold = 0.25f
-    fun usingOverview() = scale < overviewThreshold
+    fun tileLevel(): Int = when {
+        scale >= 0.25f -> 0
+        scale >= 0.11f -> 1
+        else -> 2
+    }
+    fun levelSpan(l: Int) = when (l) { 0 -> 512; 1 -> 2048; else -> 4096 }
+    fun levelPrefix(l: Int) = when (l) { 0 -> "t"; 1 -> "ov"; else -> "ov2" }
+    fun usingOverview() = tileLevel() > 0
     private val trailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 3f
@@ -158,8 +165,8 @@ class MapView @JvmOverloads constructor(
     }
     private val arrowPath = Path()
 
-    fun putTile(rx: Int, rz: Int, bmp: Bitmap?, overview: Boolean = false) {
-        val key = "${if (overview) "ov" else "t"}_${rx}_$rz"
+    fun putTile(rx: Int, rz: Int, bmp: Bitmap?, level: Int = 0) {
+        val key = "${levelPrefix(level)}_${rx}_$rz"
         if (bmp != null) {
             tileCache.put(key, bmp)
             missing.remove(key)
@@ -177,6 +184,7 @@ class MapView @JvmOverloads constructor(
     fun tileChanged(rx: Int, rz: Int) {
         missing.remove("t_${rx}_$rz")
         missing.remove("ov_${Math.floorDiv(rx, 4)}_${Math.floorDiv(rz, 4)}")
+        missing.remove("ov2_${Math.floorDiv(rx, 8)}_${Math.floorDiv(rz, 8)}")
         oracleCache.remove("o_${rx}_$rz")
         oracleMissing.remove("o_${rx}_$rz")
     }
@@ -213,7 +221,7 @@ class MapView @JvmOverloads constructor(
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(d: ScaleGestureDetector): Boolean {
                 val old = scale
-                scale = (scale * d.scaleFactor).coerceIn(0.09f, 16f)
+                scale = (scale * d.scaleFactor).coerceIn(0.03f, 16f)
                 // zoom around focal point
                 val fx = d.focusX - width / 2f
                 val fz = d.focusY - height / 2f
@@ -249,7 +257,7 @@ class MapView @JvmOverloads constructor(
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            scale = (scale * 1.6f).coerceIn(0.09f, 16f)
+            scale = (scale * 1.6f).coerceIn(0.03f, 16f)
             invalidate()
             return true
         }
@@ -317,8 +325,9 @@ class MapView @JvmOverloads constructor(
         tilePaint.isFilterBitmap = scale < 1f
         oraclePaint.isFilterBitmap = scale < 1f
 
-        val span = if (usingOverview()) 2048 else 512
-        val layer = if (usingOverview()) "ov" else "t"
+        val lvl = tileLevel()
+        val span = levelSpan(lvl)
+        val layer = levelPrefix(lvl)
         val r0x = Math.floorDiv(Math.floor(left).toInt(), span)
         val r0z = Math.floorDiv(Math.floor(top).toInt(), span)
         val r1x = Math.floorDiv(Math.ceil(right).toInt(), span)
@@ -616,7 +625,7 @@ class MapView @JvmOverloads constructor(
     /** Tiles currently in view (current layer), for periodic revalidation. */
     fun visibleRegions(): List<Pair<Int, Int>> {
         if (width == 0) return emptyList()
-        val span = if (usingOverview()) 2048 else 512
+        val span = levelSpan(tileLevel())
         val left = camX - width / 2f / scale
         val top = camZ - height / 2f / scale
         val right = camX + width / 2f / scale
