@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
     private val followS = mutableStateOf(true)
     private val navModeS = mutableStateOf(0) // 0 off, 1 walk (#goto), 2 fly (autopilot)
     private val etaS = mutableStateOf<String?>(null)
+    private val stashArmS = mutableStateOf(false)
     private var smoothBps = 0.0
     private var walkTarget: DoubleArray? = null
 
@@ -687,7 +688,44 @@ class MainActivity : ComponentActivity() {
         map.routeDraft.clear()
         map.clearShape()
         routeLenS.value = 0
+        stashArmS.value = false
         map.invalidate()
+    }
+
+    /**
+     * Stash-hider decoy: a randomized route that makes the chunk trail lie.
+     * The stash sits mid-segment on a long through-line (never an endpoint,
+     * never a shape center), a few spurs end in tight loiter clusters that
+     * read as fake stash sites, and the route's real end is km away. Every
+     * generation rolls fresh bearings/distances so there's no signature shape.
+     */
+    private fun stashDecoyRoute(px: Double, pz: Double, sx: Double, sz: Double): List<DoubleArray> {
+        val r = java.util.Random()
+        val pts = ArrayList<DoubleArray>()
+        var heading = Math.atan2(sz - pz, sx - px)
+        if (Math.hypot(sx - px, sz - pz) < 64) heading = r.nextDouble() * 2 * Math.PI
+        var x = sx; var z = sz
+        pts.add(doubleArrayOf(x, z))
+        fun leg(dist: Double) {
+            x += Math.cos(heading) * dist; z += Math.sin(heading) * dist
+            pts.add(doubleArrayOf(x, z))
+        }
+        // overshoot straight past the stash so it reads as a mid-trail point
+        leg(1500.0 + r.nextDouble() * 1500)
+        repeat(2 + r.nextInt(2)) {
+            heading += (if (r.nextBoolean()) 1 else -1) * (Math.PI / 2) + (r.nextDouble() - 0.5) * 0.6
+            leg(1200.0 + r.nextDouble() * 1800)
+            // fake terminus: tight cluster = "someone stopped here" bait
+            for (k in 0 until 4) {
+                val a = heading + Math.PI / 2 * k + r.nextDouble() * 0.5
+                x += Math.cos(a) * (120 + r.nextDouble() * 120)
+                z += Math.sin(a) * (120 + r.nextDouble() * 120)
+                pts.add(doubleArrayOf(x, z))
+            }
+        }
+        heading += (r.nextDouble() - 0.5) * 2.0
+        leg(2500.0 + r.nextDouble() * 2500)
+        return pts
     }
 
     private fun sendRoute(loop: Boolean) {
@@ -803,8 +841,18 @@ class MainActivity : ComponentActivity() {
             map.onTapBlock = { x, z ->
                 if (routeEditS.value) {
                     if (map.shapeMode == null) {
-                        map.routeDraft.add(doubleArrayOf(x.toDouble(), z.toDouble()))
-                        routeLenS.value = map.routeDraft.size
+                        if (stashArmS.value) {
+                            val p = map.player
+                            map.routeDraft.clear()
+                            map.routeDraft.addAll(stashDecoyRoute(
+                                p?.x ?: x.toDouble(), p?.z ?: z.toDouble(),
+                                x.toDouble(), z.toDouble()))
+                            routeLenS.value = map.routeDraft.size
+                            log("DECOY LAID :: TAP AGAIN REROLLS · GO FLIES IT")
+                        } else {
+                            map.routeDraft.add(doubleArrayOf(x.toDouble(), z.toDouble()))
+                            routeLenS.value = map.routeDraft.size
+                        }
                         map.invalidate()
                     }
                 } else if (navModeS.value > 0) {
@@ -1011,10 +1059,20 @@ class MainActivity : ComponentActivity() {
                                 exitRouteEdit()
                             }
                         }
+                        HudButton("STASH", active = stashArmS.value) {
+                            stashArmS.value = !stashArmS.value
+                            if (stashArmS.value) {
+                                map.clearShape()
+                                map.routeDraft.clear(); routeLenS.value = 0
+                                log("STASH HIDER :: TAP YOUR STASH — DECOY TRAIL ROUTES THROUGH IT")
+                            }
+                            map.invalidate()
+                        }
                         HudButton("CLEAR") {
                             map.routeDraft.clear()
                             routeLenS.value = 0
                             map.clearShape()
+                            stashArmS.value = false
                         }
                         HudButton("✕ EXIT") { exitRouteEdit() }
                     }

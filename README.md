@@ -93,6 +93,11 @@ MS-Paint-style shape tools that hand routes to the mod's elytra autopilot
   reach, drag to reposition. The classic basefinding sweep.
 - **AUTOMAP** — frame an area; the autopilot flies a lawnmower pattern that
   maps every chunk in it
+- **STASH** — stash hider: tap where your stash is and a randomized decoy
+  route generates *through* it — overshooting on the same bearing so the
+  stash is never a trail endpoint, spurring off to fake termini with
+  loitering clusters that bait chunk-trail hunters, and ending kilometers
+  away. Tap again to reroll the shape; no two decoys look alike.
 - **CLEAR / EXIT** — wipe the shape / leave the editor
 
 You see the live route and the autopilot's current leg drawn on the map while
