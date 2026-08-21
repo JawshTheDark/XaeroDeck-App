@@ -135,7 +135,7 @@ class MapView @JvmOverloads constructor(
     // Size caches in bytes (by bitmap.byteCount), not entry count, scaled to heap.
     private val maxMem = Runtime.getRuntime().maxMemory()
     private val tileCache = object : LruCache<String, Bitmap>(
-        minOf(48L * 1024 * 1024, maxMem / 8).toInt()
+        minOf(256L * 1024 * 1024, maxMem / 3).toInt()
     ) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
@@ -213,7 +213,7 @@ class MapView @JvmOverloads constructor(
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(d: ScaleGestureDetector): Boolean {
                 val old = scale
-                scale = (scale * d.scaleFactor).coerceIn(0.05f, 16f)
+                scale = (scale * d.scaleFactor).coerceIn(0.09f, 16f)
                 // zoom around focal point
                 val fx = d.focusX - width / 2f
                 val fz = d.focusY - height / 2f
@@ -249,7 +249,7 @@ class MapView @JvmOverloads constructor(
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            scale = (scale * 1.6f).coerceIn(0.05f, 16f)
+            scale = (scale * 1.6f).coerceIn(0.09f, 16f)
             invalidate()
             return true
         }

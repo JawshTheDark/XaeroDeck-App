@@ -729,8 +729,8 @@ class MainActivity : ComponentActivity() {
                             OracleLegendRow(mono, Hud.red, "MODIFIED")
                         }
                     }
-                    HudButton("+", big = true) { map.scale = (map.scale * 1.5f).coerceIn(0.05f, 16f); map.invalidate() }
-                    HudButton("−", big = true) { map.scale = (map.scale / 1.5f).coerceIn(0.05f, 16f); map.invalidate() }
+                    HudButton("+", big = true) { map.scale = (map.scale * 1.5f).coerceIn(0.09f, 16f); map.invalidate() }
+                    HudButton("−", big = true) { map.scale = (map.scale / 1.5f).coerceIn(0.09f, 16f); map.invalidate() }
                 }
 
                 if (overlayS.value) MeteorOverlay(mono)
