@@ -73,6 +73,9 @@ class MainActivity : ComponentActivity() {
     private val dimsS = mutableStateOf<List<DeckApi.Dimension>>(emptyList())
     private val followS = mutableStateOf(true)
     private val navModeS = mutableStateOf(0) // 0 off, 1 walk (#goto), 2 fly (autopilot)
+    private val etaS = mutableStateOf<String?>(null)
+    private var smoothBps = 0.0
+    private var walkTarget: DoubleArray? = null
     private val panelS = mutableStateOf(true)
     private val logS = mutableStateOf("")
     private val autoAddrS = mutableStateOf("")
@@ -130,6 +133,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         api = DeckApi(filesDir)
         map = MapView(this)
+        // the button rail lives on the left edge now — keep the W compass clear of it
+        map.compassWestInsetPx = resources.displayMetrics.density * 150
         val prefs = getSharedPreferences("deck", MODE_PRIVATE)
         applyAddress(prefs.getString("addr", "") ?: "")
         api.currentWorldKey = prefs.getString("worldKey", "unknown") ?: "unknown"
@@ -292,14 +297,62 @@ class MainActivity : ComponentActivity() {
                         overlayModulesS.value = api.meteorModules()
                     }
                 }
+                val bpsNow = st.stats?.bps ?: 0.0
+                smoothBps = if (smoothBps <= 0.01) bpsNow else smoothBps * 0.8 + bpsNow * 0.2
+                walkTarget?.let { t ->
+                    if (Math.hypot(p.x - t[0], p.z - t[1]) < 6.0) walkTarget = null
+                }
+                etaS.value = computeEta(st)
                 watchdog(st)
             } else {
                 map.player = null
+                etaS.value = null
             }
             // No unconditional invalidate here: the player/entities/waypoints/
             // autopilotTarget setters each post an invalidate when their drawn
             // state actually changes, so redraws still track live updates.
         }
+    }
+
+    /**
+     * Time-to-arrive from remaining path length / smoothed speed. Routes count
+     * every remaining leg; loops show the full-lap time instead (they never
+     * arrive). Recomputed on every status frame, so it tracks speed changes.
+     */
+    private fun computeEta(st: Status): String? {
+        val p = st.player ?: return null
+        var label = "ETA"
+        val dist: Double
+        val route = st.route
+        if (route != null && route.first.isNotEmpty()) {
+            val (pts, idx, loop) = route
+            if (loop) {
+                var lap = Math.hypot(pts.last()[0] - pts[0][0], pts.last()[1] - pts[0][1])
+                for (j in 0 until pts.size - 1)
+                    lap += Math.hypot(pts[j][0] - pts[j + 1][0], pts[j][1] - pts[j + 1][1])
+                label = "LAP"; dist = lap
+            } else {
+                val i0 = idx.coerceIn(0, pts.size - 1)
+                var d = Math.hypot(p.x - pts[i0][0], p.z - pts[i0][1])
+                for (j in i0 until pts.size - 1)
+                    d += Math.hypot(pts[j][0] - pts[j + 1][0], pts[j][1] - pts[j + 1][1])
+                dist = d
+            }
+        } else if (st.autopilot != null) {
+            dist = Math.hypot(p.x - st.autopilot[0], p.z - st.autopilot[1])
+        } else {
+            val t = walkTarget ?: return null
+            dist = Math.hypot(p.x - t[0], p.z - t[1])
+        }
+        val distTxt = if (dist < 1000) "${dist.toInt()}M" else "%.1fKM".format(dist / 1000.0)
+        if (smoothBps < 1.5) return "$label --:-- · $distTxt"
+        val s = (dist / smoothBps).toLong()
+        val time = when {
+            s >= 36000 -> ">10H"
+            s >= 3600 -> "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
+            else -> "%d:%02d".format(s / 60, s % 60)
+        }
+        return "$label $time · $distTxt"
     }
 
     private fun showNotification(n: DeckNotification) {
@@ -526,7 +579,6 @@ class MainActivity : ComponentActivity() {
         map.routeDraft.clear()
         map.clearShape()
         routeLenS.value = 0
-        map.compassWestInsetPx = 0f
         map.invalidate()
     }
 
@@ -655,6 +707,7 @@ class MainActivity : ComponentActivity() {
                     val fly = navModeS.value == 2
                     lifecycleScope.launch {
                         val ok = if (fly) api.autopilotFly(gx, gz) else api.baritoneGoto(gx, gz)
+                        if (ok && !fly) walkTarget = doubleArrayOf(gx.toDouble(), gz.toDouble())
                         val verb = if (fly) "✈ FLY" else "#GOTO"
                         log(when {
                             !ok && fly -> "FLY FAILED :: DECK-AUTOPILOT MODULE ON?"
@@ -683,8 +736,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Row(Modifier.align(Alignment.TopEnd).padding(10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(Modifier.align(Alignment.TopEnd).padding(10.dp)) {
+                    HudButton(if (panelS.value) "▶" else "◀") { panelS.value = !panelS.value }
+                }
+
+                if (!routeEditS.value) Column(
+                    Modifier.align(Alignment.TopStart)
+                        .padding(start = 10.dp, top = 64.dp, bottom = 64.dp)
+                        .width(IntrinsicSize.Max)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     HudButton(when (navModeS.value) {
                         1 -> "WALK"; 2 -> "FLY"; else -> "NAVIGATE"
                     }, active = navModeS.value > 0) {
@@ -747,7 +808,6 @@ class MainActivity : ComponentActivity() {
                         routeEditS.value = !routeEditS.value
                         if (routeEditS.value) {
                             map.follow = false
-                            map.compassWestInsetPx = resources.displayMetrics.density * 110
                             log("ROUTE :: TAP POINTS · GO=FLY · GO∞=LOOP · SPIRAL/AREA=PATTERNS")
                         } else exitRouteEdit()
                         map.invalidate()
@@ -758,7 +818,6 @@ class MainActivity : ComponentActivity() {
                         startActivity(i)
                     }
                     HudButton("CONFIG") { showSettings = true }
-                    HudButton(if (panelS.value) "▶" else "◀") { panelS.value = !panelS.value }
                 }
 
                 Column(Modifier.align(Alignment.BottomEnd).padding(10.dp),
@@ -784,7 +843,13 @@ class MainActivity : ComponentActivity() {
                         if (map.follow) { switchDim(""); map.player?.let { map.centerOn(it.x, it.z) } }
                     }
                     if (navModeS.value > 0 || map.autopilotTarget != null) HudButton("✕ CANCEL") {
+                        walkTarget = null; etaS.value = null
                         lifecycleScope.launch { api.baritoneCancel(); log("CANCELLED") }
+                    }
+                    etaS.value?.let {
+                        Text(it, fontFamily = mono, fontSize = 16.sp, color = Hud.cyan,
+                            modifier = Modifier.background(Color(0xE0100D17)).border(1.dp, Hud.border)
+                                .padding(horizontal = 12.dp, vertical = 13.dp))
                     }
                 }
 
@@ -1052,7 +1117,9 @@ class MainActivity : ComponentActivity() {
                     .clickable {
                         when (navModeS.value) {
                             1 -> lifecycleScope.launch {
-                                log(if (api.baritoneGoto(w.x, w.z)) "#GOTO ${w.name.uppercase()}" else "GOTO FAILED")
+                                val ok = api.baritoneGoto(w.x, w.z)
+                                if (ok) walkTarget = doubleArrayOf(w.x.toDouble(), w.z.toDouble())
+                                log(if (ok) "#GOTO ${w.name.uppercase()}" else "GOTO FAILED")
                             }
                             2 -> lifecycleScope.launch {
                                 log(if (api.autopilotFly(w.x, w.z)) "✈ FLY ${w.name.uppercase()}" else "FLY FAILED :: DECK-AUTOPILOT ON?")
