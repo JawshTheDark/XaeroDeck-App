@@ -524,6 +524,7 @@ class MainActivity : ComponentActivity() {
     private fun exitRouteEdit() {
         routeEditS.value = false
         map.routeDraft.clear()
+        map.clearShape()
         routeLenS.value = 0
         map.compassWestInsetPx = 0f
         map.invalidate()
@@ -640,9 +641,11 @@ class MainActivity : ComponentActivity() {
             }
             map.onTapBlock = { x, z ->
                 if (routeEditS.value) {
-                    map.routeDraft.add(doubleArrayOf(x.toDouble(), z.toDouble()))
-                    routeLenS.value = map.routeDraft.size
-                    map.invalidate()
+                    if (map.shapeMode == null) {
+                        map.routeDraft.add(doubleArrayOf(x.toDouble(), z.toDouble()))
+                        routeLenS.value = map.routeDraft.size
+                        map.invalidate()
+                    }
                 } else if (navModeS.value > 0) {
                     val snap = 28f / map.scale
                     val t = map.waypoints.minByOrNull {
@@ -791,14 +794,36 @@ class MainActivity : ComponentActivity() {
                         Text("ROUTE ${routeLenS.value}", fontFamily = mono, fontSize = 12.sp,
                             color = Hud.cyan,
                             modifier = Modifier.background(Color(0xE0100D17)).padding(6.dp))
-                        HudButton("GO") { sendRoute(loop = false) }
-                        HudButton("LOOP") { sendRoute(loop = true) }
-                        HudButton("SPIRAL") {
-                            lifecycleScope.launch {
-                                val ok = api.autopilotSpiral(map.camX.toInt(), map.camZ.toInt(), 160, 8)
-                                log(if (ok) "✈ SPIRAL FROM ${map.camX.toInt()} ${map.camZ.toInt()}"
-                                else "SPIRAL FAILED :: DECK-AUTOPILOT ON?")
-                                exitRouteEdit()
+                        HudButton("GO") {
+                            when (map.shapeMode) {
+                                "ellipse" -> lifecycleScope.launch {
+                                    val ok = api.autopilotRoute(map.ellipsePoints(), loop = true)
+                                    log(if (ok) "✈ ORBITING ${(map.shRx * 2).toInt()}×${(map.shRz * 2).toInt()}"
+                                    else "ROUTE FAILED :: DECK-AUTOPILOT ON?")
+                                    if (ok) exitRouteEdit()
+                                }
+                                "spiral" -> lifecycleScope.launch {
+                                    val ok = api.autopilotRoute(map.spiralPoints(), loop = false)
+                                    log(if (ok) "✈ SPIRAL r=${map.spOuter.toInt()}"
+                                    else "ROUTE FAILED :: DECK-AUTOPILOT ON?")
+                                    if (ok) exitRouteEdit()
+                                }
+                                else -> sendRoute(loop = false)
+                            }
+                        }
+                        if (map.shapeMode == null) HudButton("LOOP") { sendRoute(loop = true) }
+                        HudButton("ELLIPSE", active = map.shapeMode == "ellipse") {
+                            if (map.shapeMode == "ellipse") map.clearShape() else {
+                                map.routeDraft.clear(); routeLenS.value = 0
+                                map.startEllipse()
+                                log("ELLIPSE :: DRAG CENTER · PULL HANDLES · PINCH · GO ORBITS IT")
+                            }
+                        }
+                        HudButton("SPIRAL", active = map.shapeMode == "spiral") {
+                            if (map.shapeMode == "spiral") map.clearShape() else {
+                                map.routeDraft.clear(); routeLenS.value = 0
+                                map.startSpiral()
+                                log("SPIRAL :: DRAG TO MOVE · PINCH TO RESIZE · GO FLIES IT")
                             }
                         }
                         HudButton("AUTOMAP") {
@@ -815,7 +840,7 @@ class MainActivity : ComponentActivity() {
                         HudButton("CLEAR") {
                             map.routeDraft.clear()
                             routeLenS.value = 0
-                            map.invalidate()
+                            map.clearShape()
                         }
                         HudButton("✕ EXIT") { exitRouteEdit() }
                     }

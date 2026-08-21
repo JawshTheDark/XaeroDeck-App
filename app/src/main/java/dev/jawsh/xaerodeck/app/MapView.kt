@@ -37,6 +37,54 @@ class MapView @JvmOverloads constructor(
     var autopilotTarget: DoubleArray? = null
         set(v) { field = v; postInvalidateOnAnimation() }
     var routeDraft: MutableList<DoubleArray> = ArrayList()
+
+    // interactive shape tools for the route editor ("ellipse" | "spiral" | null)
+    var shapeMode: String? = null
+        set(v) { field = v; postInvalidateOnAnimation() }
+    var shCx = 0.0; var shCz = 0.0          // shape center (world)
+    var shRx = 1000.0; var shRz = 1000.0    // ellipse radii (world)
+    var spOuter = 1500.0                    // spiral outer radius (world)
+    val spSpacing = 160.0
+    private var dragTarget = 0              // 0 none, 1 center, 2 E, 3 W, 4 S, 5 N
+
+    fun startEllipse() {
+        shapeMode = "ellipse"
+        shCx = camX; shCz = camZ
+        shRx = width / scale * 0.30; shRz = height / scale * 0.30
+    }
+
+    fun startSpiral() {
+        shapeMode = "spiral"
+        shCx = camX; shCz = camZ
+        spOuter = minOf(width, height) / scale * 0.35
+    }
+
+    fun clearShape() {
+        shapeMode = null
+        dragTarget = 0
+        postInvalidateOnAnimation()
+    }
+
+    fun ellipsePoints(): List<DoubleArray> {
+        val n = 48
+        return (0 until n).map { i ->
+            val a = 2 * Math.PI * i / n
+            doubleArrayOf(shCx + shRx * Math.cos(a), shCz + shRz * Math.sin(a))
+        }
+    }
+
+    fun spiralPoints(): List<DoubleArray> {
+        val b = spSpacing / (2 * Math.PI)
+        var theta = 2 * Math.PI * 0.75
+        val maxTheta = spOuter / b
+        val pts = ArrayList<DoubleArray>()
+        while (theta <= maxTheta && pts.size < 512) {
+            val r = b * theta
+            pts.add(doubleArrayOf(shCx + r * Math.cos(theta), shCz + r * Math.sin(theta)))
+            theta += Math.max(0.12, 120.0 / Math.max(r, 40.0))
+        }
+        return pts
+    }
     var activeRoute: Triple<List<DoubleArray>, Int, Boolean>? = null
         set(v) { field = v; postInvalidateOnAnimation() }
     var structures: List<DeckApi.SeedFeature> = emptyList()
@@ -220,6 +268,17 @@ class MapView @JvmOverloads constructor(
     private val scaleDetector = ScaleGestureDetector(context,
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(d: ScaleGestureDetector): Boolean {
+                if (shapeMode == "ellipse") {
+                    shRx = Math.max(120.0, shRx * d.scaleFactor)
+                    shRz = Math.max(120.0, shRz * d.scaleFactor)
+                    invalidate()
+                    return true
+                }
+                if (shapeMode == "spiral") {
+                    spOuter = (spOuter * d.scaleFactor).coerceIn(spSpacing * 2, 200000.0)
+                    invalidate()
+                    return true
+                }
                 val old = scale
                 scale = (scale * d.scaleFactor).coerceIn(0.03f, 16f)
                 // zoom around focal point
@@ -232,8 +291,41 @@ class MapView @JvmOverloads constructor(
             }
         })
 
+    private fun shapeHitTest(sx: Float, sz: Float): Int {
+        if (shapeMode == null) return 0
+        val cx = ((shCx - (camX - width / 2f / scale)) * scale).toFloat()
+        val cz = ((shCz - (camZ - height / 2f / scale)) * scale).toFloat()
+        val grab = 56f
+        if (shapeMode == "ellipse") {
+            val ex = (shRx * scale).toFloat(); val ez = (shRz * scale).toFloat()
+            if (Math.hypot((sx - (cx + ex)).toDouble(), (sz - cz).toDouble()) < grab) return 2
+            if (Math.hypot((sx - (cx - ex)).toDouble(), (sz - cz).toDouble()) < grab) return 3
+            if (Math.hypot((sx - cx).toDouble(), (sz - (cz + ez)).toDouble()) < grab) return 4
+            if (Math.hypot((sx - cx).toDouble(), (sz - (cz - ez)).toDouble()) < grab) return 5
+            val nx = (sx - cx) / ex; val nz = (sz - cz) / ez
+            if (nx * nx + nz * nz <= 1.2) return 1
+        } else {
+            if (Math.hypot((sx - cx).toDouble(), (sz - cz).toDouble()) < spOuter * scale * 1.05) return 1
+        }
+        return 0
+    }
+
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(e: MotionEvent): Boolean {
+            dragTarget = shapeHitTest(e.x, e.y)
+            return true
+        }
+
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+            if (shapeMode != null && dragTarget != 0) {
+                when (dragTarget) {
+                    1 -> { shCx -= dx / scale; shCz -= dy / scale }
+                    2, 3 -> shRx = Math.max(120.0, shRx + (if (dragTarget == 2) -dx else dx) / scale)
+                    4, 5 -> shRz = Math.max(120.0, shRz + (if (dragTarget == 4) -dy else dy) / scale)
+                }
+                invalidate()
+                return true
+            }
             camX += dx / scale
             camZ += dy / scale
             if (follow) follow = false
@@ -521,6 +613,44 @@ class MapView @JvmOverloads constructor(
                 canvas.drawCircle(sx, sz, if (i == fromIdx) 9f else 6f, markerPaint)
             }
         }
+        shapeMode?.let { mode ->
+            val cx = ((shCx - left) * scale).toFloat()
+            val cz = ((shCz - top) * scale).toFloat()
+            markerPaint.style = Paint.Style.STROKE
+            markerPaint.strokeWidth = 4f
+            markerPaint.color = 0xFF66DDFF.toInt()
+            if (mode == "ellipse") {
+                val ex = (shRx * scale).toFloat(); val ez = (shRz * scale).toFloat()
+                canvas.drawOval(cx - ex, cz - ez, cx + ex, cz + ez, markerPaint)
+                markerPaint.style = Paint.Style.FILL
+                for ((hx, hz) in listOf(cx + ex to cz, cx - ex to cz, cx to cz + ez, cx to cz - ez)) {
+                    markerPaint.color = 0xFFFFFFFF.toInt()
+                    canvas.drawCircle(hx, hz, 14f, markerPaint)
+                    markerPaint.color = 0xFF66DDFF.toInt()
+                    canvas.drawCircle(hx, hz, 10f, markerPaint)
+                }
+                canvas.drawCircle(cx, cz, 8f, markerPaint)
+                textPaint.color = 0xFF66DDFF.toInt()
+                canvas.drawText("${(shRx * 2).toInt()} × ${(shRz * 2).toInt()}", cx, cz - 20f, textPaint)
+                textPaint.color = Color.WHITE
+            } else {
+                val pts = spiralPoints()
+                var px = 0f; var pz = 0f
+                for ((i, p) in pts.withIndex()) {
+                    val sx = ((p[0] - left) * scale).toFloat()
+                    val sz = ((p[1] - top) * scale).toFloat()
+                    if (i > 0) canvas.drawLine(px, pz, sx, sz, markerPaint)
+                    px = sx; pz = sz
+                }
+                markerPaint.style = Paint.Style.FILL
+                canvas.drawCircle(cx, cz, 8f, markerPaint)
+                textPaint.color = 0xFF66DDFF.toInt()
+                canvas.drawText("r=${spOuter.toInt()} · ${pts.size} pts", cx, cz - 20f, textPaint)
+                textPaint.color = Color.WHITE
+            }
+            markerPaint.style = Paint.Style.FILL
+        }
+
         if (routeDraft.isNotEmpty()) drawRoute(routeDraft, 0xFF66DDFF.toInt(), false, -1)
         activeRoute?.let { (pts, idx, loop) -> drawRoute(pts, 0xFFFF79C6.toInt(), loop, idx) }
 
