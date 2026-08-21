@@ -502,6 +502,25 @@ class DeckApi(private val baseDir: File) {
             }
         }
 
+    data class SeedFeature(val type: String, val x: Int, val z: Int)
+
+    suspend fun seedFeatures(dim: String, x0: Int, z0: Int, x1: Int, z1: Int): List<SeedFeature>? =
+        withContext(Dispatchers.IO) {
+            try {
+                val (code, body) = get("/api/seed/features?dim=$dim&x0=$x0&z0=$z0&x1=$x1&z1=$z1")
+                if (code != 200 || body == null) return@withContext null
+                val o = JSONObject(String(body))
+                if (!o.optBoolean("enabled")) return@withContext null
+                val arr = o.getJSONArray("features")
+                (0 until arr.length()).map { i ->
+                    val f = arr.getJSONObject(i)
+                    SeedFeature(f.optString("t"), f.optInt("x"), f.optInt("z"))
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
     suspend fun oracleGetSeed(): String? = withContext(Dispatchers.IO) {
         try {
             val (code, body) = get("/api/oracle/config")

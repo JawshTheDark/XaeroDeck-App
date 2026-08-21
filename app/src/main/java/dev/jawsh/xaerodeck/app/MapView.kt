@@ -36,6 +36,20 @@ class MapView @JvmOverloads constructor(
         set(v) { field = v; postInvalidateOnAnimation() }
     var autopilotTarget: DoubleArray? = null
         set(v) { field = v; postInvalidateOnAnimation() }
+    var structures: List<DeckApi.SeedFeature> = emptyList()
+        set(v) { field = v; postInvalidateOnAnimation() }
+    var showStructures = false
+
+    private val structureStyle = mapOf(
+        "fortress" to Pair("F", 0xFFE05040.toInt()),
+        "bastion" to Pair("B", 0xFFE0A030.toInt()),
+        "monument" to Pair("M", 0xFF30C0C0.toInt()),
+        "mansion" to Pair("W", 0xFFA0683C.toInt()),
+        "village" to Pair("V", 0xFFC8B078.toInt()),
+        "outpost" to Pair("O", 0xFF909090.toInt()),
+        "treasure" to Pair("T", 0xFFE8D040.toInt()),
+        "end_city" to Pair("E", 0xFFB060E0.toInt())
+    )
     var showPlayers = true
     var showHostiles = true
     var showGrid = false
@@ -361,6 +375,26 @@ class MapView @JvmOverloads constructor(
             canvas.drawCircle(sx, sz, 10f, markerPaint)
             markerPaint.style = Paint.Style.FILL
             if (scale > 0.4f) canvas.drawText(w.name, sx, sz - 16f, textPaint)
+        }
+
+        // seed-derived structure markers
+        if (showStructures) {
+            for (f in structures) {
+                val sx = ((f.x - left) * scale).toFloat()
+                val sz = ((f.z - top) * scale).toFloat()
+                if (sx < -30 || sz < -30 || sx > width + 30 || sz > height + 30) continue
+                val style = structureStyle[f.type] ?: continue
+                markerPaint.color = 0xD0101418.toInt()
+                canvas.drawRect(sx - 13f, sz - 13f, sx + 13f, sz + 13f, markerPaint)
+                markerPaint.color = style.second
+                markerPaint.style = Paint.Style.STROKE
+                markerPaint.strokeWidth = 2.5f
+                canvas.drawRect(sx - 13f, sz - 13f, sx + 13f, sz + 13f, markerPaint)
+                markerPaint.style = Paint.Style.FILL
+                textPaint.color = style.second
+                canvas.drawText(style.first, sx, sz + 8f, textPaint)
+                textPaint.color = Color.WHITE
+            }
         }
 
         // autopilot target + course line

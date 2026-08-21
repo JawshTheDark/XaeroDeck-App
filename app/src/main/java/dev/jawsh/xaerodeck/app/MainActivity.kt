@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
     private var lastMeteorRev = 0
     private val showOracleS = mutableStateOf(false)
     private val oracleLegendS = mutableStateOf<List<DeckApi.OracleLegendEntry>>(emptyList())
+    private val showLocS = mutableStateOf(false)
 
     // watchdog
     private val alertS = mutableStateOf<Pair<String, Boolean>?>(null) // text to sticky
@@ -365,6 +366,22 @@ class MainActivity : ComponentActivity() {
                 if (api.baseUrl.isNotEmpty() && lastStatus?.inGame == true && browsingS.value == null) {
                     if (tick % 10 == 0) refreshWaypoints()
                     if (tick % 15 == 0) dimsS.value = api.dimensions()
+                    if (tick % 3 == 2 && showLocS.value) {
+                        val halfW = map.width / 2f / map.scale
+                        val halfH = map.height / 2f / map.scale
+                        val cx = map.camX; val cz = map.camZ
+                        val limit = 32000.0
+                        val x0 = (cx - minOf(halfW.toDouble(), limit)).toInt()
+                        val x1 = (cx + minOf(halfW.toDouble(), limit)).toInt()
+                        val z0 = (cz - minOf(halfH.toDouble(), limit)).toInt()
+                        val z1 = (cz + minOf(halfH.toDouble(), limit)).toInt()
+                        val dimPath = viewedDim.ifEmpty {
+                            playerDim?.substringAfter(':') ?: "overworld"
+                        }
+                        api.seedFeatures(dimPath, x0, z0, x1, z1)?.let { feats ->
+                            map.structures = feats
+                        }
+                    }
                     if (tick % 3 == 0) map.retryMissing()
                     if (tick % 2 == 0 && viewedDim.isEmpty()) {
                         map.player?.let { p ->
@@ -565,6 +582,13 @@ class MainActivity : ComponentActivity() {
                                 map.invalidate()
                             }
                         }
+                    }
+                    HudButton("LOC", active = showLocS.value) {
+                        showLocS.value = !showLocS.value
+                        map.showStructures = showLocS.value
+                        if (!showLocS.value) map.structures = emptyList()
+                        else log("LOC :: SEED STRUCTURE MARKERS ON")
+                        map.invalidate()
                     }
                     HudButton("MTR") {
                         val i = Intent(this@MainActivity, MeteorActivity::class.java)
