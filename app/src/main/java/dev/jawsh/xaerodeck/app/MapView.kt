@@ -276,7 +276,9 @@ class MapView @JvmOverloads constructor(
                 flingLastNanos = now
                 camX += flingVX * dt
                 camZ += flingVZ * dt
-                val decay = Math.exp(-3.5 * dt)
+                // friction scales with zoom: zoomed-out flings glide far, zoomed-in stops snap
+                val rate = 3.5 * Math.sqrt(scale.coerceIn(0.05f, 4f).toDouble())
+                val decay = Math.exp(-rate * dt)
                 flingVX *= decay
                 flingVZ *= decay
                 if (Math.hypot(flingVX, flingVZ) * scale < 12.0) stopFling()
