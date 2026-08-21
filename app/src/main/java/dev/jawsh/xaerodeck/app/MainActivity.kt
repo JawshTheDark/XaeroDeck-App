@@ -643,7 +643,7 @@ class MainActivity : ComponentActivity() {
                 Row(Modifier.align(Alignment.TopEnd).padding(10.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     HudButton(when (navModeS.value) {
-                        1 -> "WALK"; 2 -> "FLY"; else -> "NAV"
+                        1 -> "WALK"; 2 -> "FLY"; else -> "NAVIGATE"
                     }, active = navModeS.value > 0) {
                         navModeS.value = (navModeS.value + 1) % 3
                         log(when (navModeS.value) {
@@ -653,7 +653,7 @@ class MainActivity : ComponentActivity() {
                         })
                     }
                     HudButton("CHAT") { showChat = true }
-                    HudButton("GUI", active = overlayS.value) {
+                    HudButton("MODULES", active = overlayS.value) {
                         overlayS.value = !overlayS.value
                         getSharedPreferences("deck", MODE_PRIVATE).edit()
                             .putBoolean("meteorOverlay", overlayS.value).apply()
@@ -680,7 +680,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    Text("LOC", fontFamily = FontFamily.Monospace, fontSize = 17.sp,
+                    Text("MARKERS", fontFamily = FontFamily.Monospace, fontSize = 17.sp,
                         color = if (showLocS.value) Hud.onAccent else Hud.accent,
                         modifier = Modifier
                             .background(if (showLocS.value) Hud.accent else Hud.surface)
@@ -692,7 +692,7 @@ class MainActivity : ComponentActivity() {
                                         map.showStructures = showLocS.value
                                         if (!showLocS.value) map.structures = emptyList()
                                         else {
-                                            log("LOC ON :: HOLD FOR FILTERS")
+                                            log("MARKERS ON :: HOLD FOR FILTERS")
                                             refreshSlimeSeed()
                                         }
                                         map.invalidate()
@@ -700,7 +700,7 @@ class MainActivity : ComponentActivity() {
                                     onLongPress = { showLocFilterS.value = true })
                             }
                             .padding(horizontal = 18.dp, vertical = 14.dp))
-                    HudButton("RTE", active = routeEditS.value) {
+                    HudButton("ROUTE", active = routeEditS.value) {
                         routeEditS.value = !routeEditS.value
                         if (routeEditS.value) {
                             map.follow = false
@@ -709,12 +709,12 @@ class MainActivity : ComponentActivity() {
                         } else exitRouteEdit()
                         map.invalidate()
                     }
-                    HudButton("MTR") {
+                    HudButton("METEOR") {
                         val i = Intent(this@MainActivity, MeteorActivity::class.java)
                         i.putExtra("baseUrl", api.baseUrl)
                         startActivity(i)
                     }
-                    HudButton("CFG") { showSettings = true }
+                    HudButton("CONFIG") { showSettings = true }
                     HudButton(if (panelS.value) "▶" else "◀") { panelS.value = !panelS.value }
                 }
 
@@ -752,7 +752,7 @@ class MainActivity : ComponentActivity() {
                             color = Hud.cyan,
                             modifier = Modifier.background(Color(0xE0100D17)).padding(6.dp))
                         HudButton("GO") { sendRoute(loop = false) }
-                        HudButton("GO ∞") { sendRoute(loop = true) }
+                        HudButton("LOOP") { sendRoute(loop = true) }
                         HudButton("SPIRAL") {
                             lifecycleScope.launch {
                                 val ok = api.autopilotSpiral(map.camX.toInt(), map.camZ.toInt(), 160, 8)
@@ -761,7 +761,7 @@ class MainActivity : ComponentActivity() {
                                 exitRouteEdit()
                             }
                         }
-                        HudButton("AREA") {
+                        HudButton("AUTOMAP") {
                             val hw = map.width / 2f / map.scale
                             val hh = map.height / 2f / map.scale
                             lifecycleScope.launch {
@@ -772,7 +772,7 @@ class MainActivity : ComponentActivity() {
                                 exitRouteEdit()
                             }
                         }
-                        HudButton("CLR") {
+                        HudButton("CLEAR") {
                             map.routeDraft.clear()
                             routeLenS.value = 0
                             map.invalidate()
