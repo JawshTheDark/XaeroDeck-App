@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
     private var streamJob: Job? = null
     private val tileSemaphore = Semaphore(6)
     private val pendingTiles = HashSet<String>()
+    private val lastOverviewReq = HashMap<String, Long>()
 
     private var viewedDim = ""
     private var playerDim: String? = null
@@ -403,7 +404,7 @@ class MainActivity : ComponentActivity() {
                             map.structures = feats
                         }
                     }
-                    if (tick % 3 == 0) map.retryMissing()
+                    if (tick % (if (map.usingOverview()) 10 else 3) == 0) map.retryMissing()
                     if (tick % 2 == 0 && viewedDim.isEmpty()) {
                         map.player?.let { p ->
                             val prx = Math.floorDiv(p.x.toInt(), 512)
