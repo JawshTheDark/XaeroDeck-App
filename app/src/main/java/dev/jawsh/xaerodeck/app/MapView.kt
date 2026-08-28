@@ -129,6 +129,18 @@ class MapView @JvmOverloads constructor(
     private val iconPaint = Paint().apply { isFilterBitmap = false } // keep pixel art crisp
     private val iconDst = android.graphics.RectF()
 
+    /** Hold-to-peek: full structure names under every marker while true. */
+    var structNames = false
+        set(v) { field = v; postInvalidateOnAnimation() }
+    val structLabels = mapOf(
+        "stronghold" to "STRONGHOLD", "monument" to "MONUMENT", "mansion" to "MANSION",
+        "village" to "VILLAGE", "outpost" to "OUTPOST", "treasure" to "BURIED TREASURE",
+        "desert_temple" to "DESERT TEMPLE", "jungle_temple" to "JUNGLE TEMPLE",
+        "witch_hut" to "WITCH HUT", "igloo" to "IGLOO", "shipwreck" to "SHIPWRECK",
+        "ocean_ruin" to "OCEAN RUIN", "ruined_portal" to "RUINED PORTAL",
+        "ruined_portal_n" to "RUINED PORTAL", "fortress" to "FORTRESS",
+        "bastion" to "BASTION", "end_city" to "END CITY", "gateway" to "END GATEWAY")
+
     private fun isSlimeChunk(seed: Long, cx: Int, cz: Int): Boolean {
         var s = seed +
                 cx.toLong() * cx * 0x4c1906L + cx.toLong() * 0x5ac0dbL +
@@ -604,6 +616,12 @@ class MapView @JvmOverloads constructor(
                     markerPaint.style = Paint.Style.FILL
                     textPaint.color = style.second
                     canvas.drawText(style.first, sx, sz + 8f, textPaint)
+                    textPaint.color = Color.WHITE
+                }
+                if (structNames) {
+                    textPaint.color = style.second
+                    canvas.drawText(structLabels[f.type] ?: f.type.uppercase(),
+                        sx, sz + 36f, textPaint)
                     textPaint.color = Color.WHITE
                 }
             }

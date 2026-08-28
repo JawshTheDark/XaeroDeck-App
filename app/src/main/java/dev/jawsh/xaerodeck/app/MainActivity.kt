@@ -796,12 +796,16 @@ class MainActivity : ComponentActivity() {
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(Hud.border))
             Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
-                for ((key, label) in order) {
+                for ((i, entry) in order.withIndex()) {
+                    val (key, label) = entry
                     val style = map.structureStyle[key]
                     val glyph = style?.first ?: "SC"
                     val gc = Color(style?.second ?: 0xFF44D044.toInt())
                     val icon = remember(key) { map.structIcon(key) }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth()
+                        .background(if (i % 2 == 0) Hud.surface else Color.Transparent)
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
                         // legend chip: the exact sprite the map draws
                         Box(Modifier.width(34.dp).height(34.dp),
                             contentAlignment = Alignment.Center) {
@@ -1024,6 +1028,22 @@ class MainActivity : ComponentActivity() {
                             for (e in oracleLegendS.value) OracleLegendRow(mono, Color(e.color), e.label)
                             OracleLegendRow(mono, Hud.red, "MODIFIED")
                         }
+                    }
+                    if (showLocS.value) {
+                        var namesHeld by remember { mutableStateOf(false) }
+                        Text("NAMES", fontFamily = FontFamily.Monospace, fontSize = 17.sp,
+                            color = if (namesHeld) Hud.onAccent else Hud.accent,
+                            modifier = Modifier
+                                .background(if (namesHeld) Hud.accent else Hud.surface)
+                                .border(1.dp, if (namesHeld) Hud.accent else Hud.border)
+                                .pointerInput(Unit) {
+                                    detectTapGestures(onPress = {
+                                        namesHeld = true; map.structNames = true
+                                        tryAwaitRelease()
+                                        namesHeld = false; map.structNames = false
+                                    })
+                                }
+                                .padding(horizontal = 18.dp, vertical = 14.dp))
                     }
                     HudButton("+", big = true) { map.scale = (map.scale * 1.5f).coerceIn(0.03f, 16f); map.invalidate() }
                     HudButton("−", big = true) { map.scale = (map.scale / 1.5f).coerceIn(0.03f, 16f); map.invalidate() }
