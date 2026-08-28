@@ -38,6 +38,59 @@ object Hud {
 fun Modifier.hudPanel(border: Color = Hud.border, bg: Color = Hud.surface): Modifier =
     this.background(bg).border(1.dp, border).padding(1.dp)
 
+/** Legacy §-code palette (dark colors lifted so they survive the dark HUD). */
+private val MC_LEGACY = mapOf(
+    '0' to Color(0xFF777777), '1' to Color(0xFF5555CC), '2' to Color(0xFF00AA00),
+    '3' to Color(0xFF00AAAA), '4' to Color(0xFFAA0000), '5' to Color(0xFFAA00AA),
+    '6' to Color(0xFFFFAA00), '7' to Color(0xFFAAAAAA), '8' to Color(0xFF888888),
+    '9' to Color(0xFF5555FF), 'a' to Color(0xFF55FF55), 'b' to Color(0xFF55FFFF),
+    'c' to Color(0xFFFF5555), 'd' to Color(0xFFFF55FF), 'e' to Color(0xFFFFFF55),
+    'f' to Color(0xFFFFFFFF))
+
+/** Text with all §-codes removed — for canvas labels and identity matching. */
+fun stripMc(s: String) = s.replace(Regex("§."), "")
+
+/** Render legacy §-coded text (bot names, server strings) in real MC colors. */
+fun legacyToAnnotated(s: String, default: Color): AnnotatedString = buildAnnotatedString {
+    var color = default
+    var bold = false; var italic = false; var underline = false; var strike = false
+    var i = 0
+    while (i < s.length) {
+        val c = s[i]
+        if (c == '§' && i + 1 < s.length) {
+            when (val code = s[i + 1].lowercaseChar()) {
+                in MC_LEGACY -> {
+                    color = MC_LEGACY[code]!!
+                    bold = false; italic = false; underline = false; strike = false
+                }
+                'l' -> bold = true
+                'o' -> italic = true
+                'n' -> underline = true
+                'm' -> strike = true
+                'r' -> {
+                    color = default
+                    bold = false; italic = false; underline = false; strike = false
+                }
+            }
+            i += 2
+        } else {
+            pushStyle(SpanStyle(color = color,
+                fontWeight = if (bold) FontWeight.Bold else null,
+                fontStyle = if (italic) FontStyle.Italic else null,
+                textDecoration = when {
+                    underline && strike -> TextDecoration.combine(
+                        listOf(TextDecoration.Underline, TextDecoration.LineThrough))
+                    underline -> TextDecoration.Underline
+                    strike -> TextDecoration.LineThrough
+                    else -> null
+                }))
+            append(c)
+            pop()
+            i++
+        }
+    }
+}
+
 /** Minecraft styled spans → Compose AnnotatedString. */
 fun List<TextSpan>.toAnnotated(defaultColor: Color = Hud.text): AnnotatedString =
     buildAnnotatedString {

@@ -526,7 +526,8 @@ class MapView @JvmOverloads constructor(
             }
             canvas.drawCircle(sx, sz, if (isPlayer) 8f else 5f, markerPaint)
             if (isPlayer && e.name != null) {
-                canvas.drawText(e.name, sx, sz - 14f, textPaint)
+                val label = stripMc(e.name)
+                canvas.drawText(label.ifBlank { "?" }, sx, sz - 14f, textPaint)
             }
         }
 

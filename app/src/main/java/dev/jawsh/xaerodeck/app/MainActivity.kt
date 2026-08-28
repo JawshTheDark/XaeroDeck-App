@@ -350,12 +350,15 @@ class MainActivity : ComponentActivity() {
         for (e in st.entities) {
             if (e.type != 'p' && e.type != 'f') continue
             val name = e.name ?: continue
-            val last = list.firstOrNull { it.name == name }
+            // identity ignores §-codes: color-cycling bot names (and the all-code
+            // blank-name swarms) collapse into one entry instead of flooding the log
+            val key = stripMc(name).ifBlank { "(blank)" }
+            val last = list.firstOrNull { stripMc(it.name).ifBlank { "(blank)" } == key }
             if (last != null && now - last.time < 300000 &&
                 Math.hypot(e.x - last.x, e.z - last.z) < 500.0) {
                 if (now - last.time >= 30000 || Math.hypot(e.x - last.x, e.z - last.z) >= 32.0) {
-                    list = listOf(last.copy(x = e.x.toInt(), z = e.z.toInt(), dim = dim, time = now)) +
-                            list.filter { it !== last }
+                    list = listOf(last.copy(name = name, x = e.x.toInt(), z = e.z.toInt(),
+                        dim = dim, time = now)) + list.filter { it !== last }
                     changed = true
                 }
             } else {
@@ -381,7 +384,7 @@ class MainActivity : ComponentActivity() {
             val o = arr.getJSONObject(i)
             Sighting(o.getString("n"), o.getInt("x"), o.getInt("z"),
                 o.optString("d", "overworld"), o.getLong("t"), o.optBoolean("f"))
-        }
+        }.distinctBy { stripMc(it.name).ifBlank { "(blank)" } }
     } catch (e: Exception) {
         emptyList()
     }
@@ -1326,9 +1329,13 @@ class MainActivity : ComponentActivity() {
                         }
                         .padding(vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Text((if (s.friend) "✦ " else "☠ ") + s.name,
-                            fontFamily = mono, fontSize = 13.sp,
-                            color = if (s.friend) Hud.green else Hud.red,
+                        val base = if (s.friend) Hud.green else Hud.red
+                        val nameAnn = androidx.compose.ui.text.buildAnnotatedString {
+                            append(if (s.friend) "✦ " else "☠ ")
+                            if (stripMc(s.name).isBlank()) append("(BLANK NAME)")
+                            else append(legacyToAnnotated(s.name, base))
+                        }
+                        Text(nameAnn, fontFamily = mono, fontSize = 13.sp, color = base,
                             modifier = Modifier.weight(1f))
                         Text("${s.x} ${s.z}", fontFamily = mono, fontSize = 12.sp, color = Hud.text)
                         Text("  ${ago(s.time)}", fontFamily = mono, fontSize = 11.sp, color = Hud.sub)
