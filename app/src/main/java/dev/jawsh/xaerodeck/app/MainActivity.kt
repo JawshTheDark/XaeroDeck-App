@@ -1235,13 +1235,19 @@ class MainActivity : ComponentActivity() {
                 val p = st.player
                 Text("▚ ${st.worldId?.uppercase() ?: "?"} :: ${st.dimension?.substringAfter(':')?.uppercase() ?: "?"}",
                     fontFamily = mono, fontSize = 11.sp, color = Hud.accent)
-                Text("%,.0f %,.0f %,.0f".format(p.x, p.y, p.z),
+                val curLabel = when (st.dimension) {
+                    "minecraft:the_nether" -> "N: "
+                    "minecraft:overworld" -> "O: "
+                    "minecraft:the_end" -> "E: "
+                    else -> ""
+                }
+                Text(curLabel + "%,.0f %,.0f %,.0f".format(p.x, p.y, p.z),
                     fontFamily = mono, fontSize = 19.sp, color = Hud.green, fontWeight = FontWeight.Bold)
                 if (st.dimension == "minecraft:the_nether")
-                    Text("OW %,.0f %,.0f".format(p.x * 8, p.z * 8),
+                    Text("O: %,.0f %,.0f".format(p.x * 8, p.z * 8),
                         fontFamily = mono, fontSize = 19.sp, color = Hud.text, fontWeight = FontWeight.Bold)
                 else if (st.dimension == "minecraft:overworld")
-                    Text("NETHER %,.0f %,.0f".format(p.x / 8, p.z / 8),
+                    Text("N: %,.0f %,.0f".format(p.x / 8, p.z / 8),
                         fontFamily = mono, fontSize = 19.sp, color = Hud.text, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(10.dp))
                 st.stats?.let { s ->
