@@ -1140,15 +1140,16 @@ class MainActivity : ComponentActivity() {
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
                     for ((_, t) in toasts) {
-                        Text(t, fontFamily = mono, fontSize = 22.sp,
+                        Text(t, fontFamily = mono, fontSize = 34.sp, fontWeight = FontWeight.Bold,
                             modifier = Modifier.background(Color(0xF0100D17))
-                                .border(1.dp, Hud.accent)
-                                .padding(horizontal = 26.dp, vertical = 16.dp))
+                                .border(2.dp, Hud.accent)
+                                .padding(horizontal = 34.dp, vertical = 24.dp))
                     }
                     if (logS.value.isNotEmpty()) {
-                        Text(logS.value, fontFamily = mono, fontSize = 15.sp, color = Hud.accent,
+                        Text(logS.value, fontFamily = mono, fontSize = 21.sp, color = Hud.accent,
                             modifier = Modifier.background(Color(0xE0100D17))
-                                .padding(horizontal = 14.dp, vertical = 8.dp))
+                                .border(1.dp, Hud.border)
+                                .padding(horizontal = 20.dp, vertical = 12.dp))
                     }
                 }
 
