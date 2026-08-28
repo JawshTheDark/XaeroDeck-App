@@ -56,8 +56,19 @@ tactical-HUD theme, Jetpack Compose. Works on any Android 8+ device.
   hostiles/neutrals/passives in Xaero's minimap colors, angered neutrals shown
   hostile. Travel **trail history** persists across sessions.
 - **Waypoints** — rendered live from Xaero's minimap set, list auto-sized to
-  the longest name. Tap a waypoint to jump to it; long-press the map to create
-  one (name, Y, all 16 Xaero colors); long-press a list entry to delete.
+  the longest name, each row showing its **nether/overworld twin coords**.
+  Tap a waypoint to jump to it; long-press the map to create one (name, Y,
+  all 16 Xaero colors); long-press a list entry to delete.
+- **Live ETA** — navigating anywhere shows a time-to-arrive chip computed
+  from your real (smoothed) speed, re-estimated every stream frame: straight
+  shots, full remaining route length for multi-leg routes and spirals, lap
+  time for orbits — plus a **via-nether time** on long overworld hauls.
+- **Position readout** — both dimensions at once (`N:` and `O:` lines),
+  comma-separated numbers, current dimension in green.
+- **Sighting log** — every player the radar passes is journaled per server
+  with coords, dimension, and age; friends green, everyone else red, names
+  rendered in their Minecraft colors (bot walls of §-code names collapse
+  into one entry). Tap a sighting to jump the map there.
 - **Stats bar** — speed (bps), ping, server TPS, HP, totem count, elytra
   durability %, and active potion effects with live countdowns.
 
@@ -75,7 +86,8 @@ for fat-finger use while flying.
 | **CHAT** | Chat window (opens scrolled to newest; **pinch to resize text**) | — |
 | **MODULES** | Meteor module browser: toggle any module, edit its settings inline (switches, real-bounds sliders, dropdowns) | — |
 | **METEOR** | Quick panel of favorite module toggles | — |
-| **CONFIG** | Server address, token, watchdog, alert sound, oracle seed | — |
+| **CONFIG** | Server address, token, watchdog, alert sound, oracle seed, structure version | — |
+| **NAMES** | *(hold)* Shows the full structure name under every marker while pressed | — |
 
 ## Route editor — draw your flight
 
@@ -128,10 +140,12 @@ community seed DB, or typed into CONFIG → oracle seed):
 - **Notification toasts** — big, top-center, streaming from the mod (Meteor
   notifier events, radar mods, seed captures, deaths).
 - **Watchdog** 🚨 — pattern-watches your stats and fires a full-volume alert:
-  **TOTEM POP** (totem count drops) and **ELYTRA LOW** (durability under
-  threshold). Pick any system ringtone/alarm as the alert sound in CONFIG
-  (with TEST ALERT button); silent mode supported. A grace period after
-  joining a world prevents false alarms.
+  **TOTEM POP** (totem count drops), **ELYTRA LOW** (durability under
+  threshold), **HP LOW**, **PLAYER** (radar contact), and **CONNECTION
+  LOST** (the stream dies while you're AFK — crash/kick alarm). Pick any
+  system ringtone/alarm as the alert sound in CONFIG (with TEST ALERT
+  button); silent mode supported. A grace period after joining a world
+  prevents false alarms.
 - **Death alert** — vibrates the device and pins your death coordinates.
 
 ## Offline mode
