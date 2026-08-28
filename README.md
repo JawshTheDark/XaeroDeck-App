@@ -102,14 +102,18 @@ MS-Paint-style shape tools that hand routes to the mod's elytra autopilot
   drag the body to move, **pinch to scale**. Down to 16-block radii for tight
   orbits.
 - **SPIRAL** — a smooth Archimedean spiral overlay; pinch to grow/shrink its
-  reach, drag to reposition. The classic basefinding sweep.
+  reach, drag to reposition, and **GAP±** buttons set the ring spacing in
+  32-block steps — match it to your render distance for gapless chunk
+  coverage without wasted overlap. The classic basefinding sweep.
 - **AUTOMAP** — frame an area; the autopilot flies a lawnmower pattern that
   maps every chunk in it
-- **STASH** — stash hider: tap where your stash is and a randomized decoy
-  route generates *through* it — overshooting on the same bearing so the
-  stash is never a trail endpoint, spurring off to fake termini with
-  loitering clusters that bait chunk-trail hunters, and ending kilometers
-  away. Tap again to reroll the shape; no two decoys look alike.
+- **DECOY** — anti-trail-hunter radials: tap a center (your position or
+  anywhere nearby) and randomized arms radiate outward — the autopilot
+  flies to the end of each arm and **back to the hub** before starting the
+  next. Every arm's chunk trail reads as an out-and-back run, so neither
+  bots scanning NewChunks nor human trail-followers can tell which
+  direction (if any) matters. Arm count, angles, and lengths reroll on
+  every tap.
 - **CLEAR / EXIT** — wipe the shape / leave the editor
 
 You see the live route and the autopilot's current leg drawn on the map while

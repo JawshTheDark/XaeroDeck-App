@@ -44,7 +44,7 @@ class MapView @JvmOverloads constructor(
     var shCx = 0.0; var shCz = 0.0          // shape center (world)
     var shRx = 1000.0; var shRz = 1000.0    // ellipse radii (world)
     var spOuter = 1500.0                    // spiral outer radius (world)
-    val spSpacing = 160.0
+    var spSpacing = 160.0                   // ring gap — tune to chunk-load spacing
     private var dragTarget = 0              // 0 none, 1 center, 2 E, 3 W, 4 S, 5 N
 
     fun startEllipse() {

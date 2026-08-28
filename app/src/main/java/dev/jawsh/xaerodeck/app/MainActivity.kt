@@ -703,38 +703,32 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Stash-hider decoy: a randomized route that makes the chunk trail lie.
-     * The stash sits mid-segment on a long through-line (never an endpoint,
-     * never a shape center), a few spurs end in tight loiter clusters that
-     * read as fake stash sites, and the route's real end is km away. Every
-     * generation rolls fresh bearings/distances so there's no signature shape.
+     * Stash-hider decoy: hub-and-spoke radials. The tapped point becomes the
+     * hub (your position / somewhere nearby); randomized arms radiate outward
+     * and the flight goes out each arm and back to the hub before starting
+     * the next. Every arm's chunk trail reads as a stash out-and-back, so no
+     * single trail points anywhere meaningful. Arm count, angles, and lengths
+     * reroll every generation — there's no signature shape to learn.
      */
-    private fun stashDecoyRoute(px: Double, pz: Double, sx: Double, sz: Double): List<DoubleArray> {
+    private fun stashDecoyRoute(sx: Double, sz: Double): List<DoubleArray> {
         val r = java.util.Random()
         val pts = ArrayList<DoubleArray>()
-        var heading = Math.atan2(sz - pz, sx - px)
-        if (Math.hypot(sx - px, sz - pz) < 64) heading = r.nextDouble() * 2 * Math.PI
-        var x = sx; var z = sz
-        pts.add(doubleArrayOf(x, z))
-        fun leg(dist: Double) {
-            x += Math.cos(heading) * dist; z += Math.sin(heading) * dist
-            pts.add(doubleArrayOf(x, z))
+        pts.add(doubleArrayOf(sx, sz))
+        val arms = 4 + r.nextInt(4)
+        val base = r.nextDouble() * 2 * Math.PI
+        for (i in 0 until arms) {
+            // even fan with jitter — covers all directions without looking drawn
+            val a = base + 2 * Math.PI * i / arms + (r.nextDouble() - 0.5) * (Math.PI / arms)
+            val len = 1200.0 + r.nextDouble() * 1800
+            // slight mid-arm bend so arms aren't laser-straight
+            val mid = 0.45 + r.nextDouble() * 0.2
+            val bend = (r.nextDouble() - 0.5) * 0.35
+            pts.add(doubleArrayOf(
+                sx + Math.cos(a + bend) * len * mid,
+                sz + Math.sin(a + bend) * len * mid))
+            pts.add(doubleArrayOf(sx + Math.cos(a) * len, sz + Math.sin(a) * len))
+            pts.add(doubleArrayOf(sx, sz)) // back to the hub before the next arm
         }
-        // overshoot straight past the stash so it reads as a mid-trail point
-        leg(1500.0 + r.nextDouble() * 1500)
-        repeat(2 + r.nextInt(2)) {
-            heading += (if (r.nextBoolean()) 1 else -1) * (Math.PI / 2) + (r.nextDouble() - 0.5) * 0.6
-            leg(1200.0 + r.nextDouble() * 1800)
-            // fake terminus: tight cluster = "someone stopped here" bait
-            for (k in 0 until 4) {
-                val a = heading + Math.PI / 2 * k + r.nextDouble() * 0.5
-                x += Math.cos(a) * (120 + r.nextDouble() * 120)
-                z += Math.sin(a) * (120 + r.nextDouble() * 120)
-                pts.add(doubleArrayOf(x, z))
-            }
-        }
-        heading += (r.nextDouble() - 0.5) * 2.0
-        leg(2500.0 + r.nextDouble() * 2500)
         return pts
     }
 
@@ -890,13 +884,10 @@ class MainActivity : ComponentActivity() {
                 if (routeEditS.value) {
                     if (map.shapeMode == null) {
                         if (stashArmS.value) {
-                            val p = map.player
                             map.routeDraft.clear()
-                            map.routeDraft.addAll(stashDecoyRoute(
-                                p?.x ?: x.toDouble(), p?.z ?: z.toDouble(),
-                                x.toDouble(), z.toDouble()))
+                            map.routeDraft.addAll(stashDecoyRoute(x.toDouble(), z.toDouble()))
                             routeLenS.value = map.routeDraft.size
-                            log("DECOY LAID :: TAP AGAIN REROLLS · GO FLIES IT")
+                            log("RADIALS LAID :: TAP AGAIN REROLLS · GO FLIES EACH ARM OUT AND BACK")
                         } else {
                             map.routeDraft.add(doubleArrayOf(x.toDouble(), z.toDouble()))
                             routeLenS.value = map.routeDraft.size
@@ -1109,8 +1100,24 @@ class MainActivity : ComponentActivity() {
                             if (map.shapeMode == "spiral") map.clearShape() else {
                                 map.routeDraft.clear(); routeLenS.value = 0
                                 map.startSpiral()
-                                log("SPIRAL :: DRAG TO MOVE · PINCH TO RESIZE · GO FLIES IT")
+                                log("SPIRAL :: DRAG MOVES · PINCH RESIZES · GAP± SETS RING SPACING")
                             }
+                        }
+                        if (map.shapeMode == "spiral") {
+                            var gap by remember { mutableStateOf(map.spSpacing.toInt()) }
+                            HudButton("GAP +") {
+                                gap = (gap + 32).coerceAtMost(512)
+                                map.spSpacing = gap.toDouble(); map.invalidate()
+                                log("RING GAP $gap BLOCKS")
+                            }
+                            HudButton("GAP −") {
+                                gap = (gap - 32).coerceAtLeast(32)
+                                map.spSpacing = gap.toDouble(); map.invalidate()
+                                log("RING GAP $gap BLOCKS")
+                            }
+                            Text("GAP ${gap}", fontFamily = mono, fontSize = 12.sp,
+                                color = Hud.cyan,
+                                modifier = Modifier.background(Color(0xE0100D17)).padding(6.dp))
                         }
                         HudButton("AUTOMAP") {
                             val hw = map.width / 2f / map.scale
@@ -1123,12 +1130,12 @@ class MainActivity : ComponentActivity() {
                                 exitRouteEdit()
                             }
                         }
-                        HudButton("STASH", active = stashArmS.value) {
+                        HudButton("DECOY", active = stashArmS.value) {
                             stashArmS.value = !stashArmS.value
                             if (stashArmS.value) {
                                 map.clearShape()
                                 map.routeDraft.clear(); routeLenS.value = 0
-                                log("STASH HIDER :: TAP YOUR STASH — DECOY TRAIL ROUTES THROUGH IT")
+                                log("DECOY :: TAP A CENTER — RADIAL ARMS FLY OUT AND BACK")
                             }
                             map.invalidate()
                         }
