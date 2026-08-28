@@ -186,8 +186,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private var logId = 0L
     private fun log(msg: String) {
         logS.value = msg
+        val id = ++logId
+        lifecycleScope.launch {
+            delay(6000)
+            if (logId == id) logS.value = ""
+        }
     }
 
     private fun requestTile(rx: Int, rz: Int, force: Boolean, level: Int = map.tileLevel()) {
@@ -1145,8 +1151,14 @@ class MainActivity : ComponentActivity() {
                                 .border(2.dp, Hud.accent)
                                 .padding(horizontal = 34.dp, vertical = 24.dp))
                     }
-                    if (logS.value.isNotEmpty()) {
-                        Text(logS.value, fontFamily = mono, fontSize = 21.sp, color = Hud.accent,
+                    var lastLog by remember { mutableStateOf("") }
+                    if (logS.value.isNotEmpty()) lastLog = logS.value
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = logS.value.isNotEmpty(),
+                        enter = androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.fadeOut(
+                            androidx.compose.animation.core.tween(900))) {
+                        Text(lastLog, fontFamily = mono, fontSize = 21.sp, color = Hud.accent,
                             modifier = Modifier.background(Color(0xE0100D17))
                                 .border(1.dp, Hud.border)
                                 .padding(horizontal = 20.dp, vertical = 12.dp))
