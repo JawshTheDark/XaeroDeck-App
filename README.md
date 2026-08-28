@@ -111,12 +111,15 @@ community seed DB, or typed into CONFIG → oracle seed):
 - **ERA** tints chunks by which Minecraft version's worldgen produced them and
   paints **player-modified terrain red** — old-growth bases and stash holes
   light up.
-- **MARKERS** draws chunkbase-style predicted structures with two-letter
-  glyphs: villages, bastions, fortresses, monuments, mansions, outposts,
-  temples, shipwrecks, ruined portals, end cities, strongholds, the end
-  gateway ring… each type toggleable via long-press MARKERS. **Slime chunks**
-  are computed on-device straight from the seed and overlay in green when
-  zoomed in.
+- **MARKERS** draws chunkbase-style predicted structures with their actual
+  Minecraft sprite icons: villages, bastions, fortresses, monuments,
+  mansions, outposts, temples, shipwrecks, ruined portals, end cities,
+  strongholds, the end gateway ring… Long-press MARKERS for the legend —
+  every type with its icon, individual toggles, and an ALL MARKERS master
+  switch. **Slime chunks** are computed on-device straight from the seed
+  and overlay in green when zoomed in.
+  *(Structure icons from the [Minecraft Wiki](https://minecraft.wiki/w/Structure),
+  CC BY-NC-SA 3.0.)*
 
 ## Chat, notifications and watchdog
 

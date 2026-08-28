@@ -114,6 +114,21 @@ class MapView @JvmOverloads constructor(
     var enabledTypes: MutableSet<String> = structureStyle.keys.toMutableSet().also { it.add("slime") }
     var slimeSeed: Long? = null
 
+    // 16px Minecraft Wiki structure sprites from assets/structicons (glyph box fallback)
+    private val structIcons = HashMap<String, android.graphics.Bitmap?>()
+    fun structIcon(type: String): android.graphics.Bitmap? = structIcons.getOrPut(type) {
+        try {
+            val name = if (type == "ruined_portal_n") "ruined_portal" else type
+            context.assets.open("structicons/$name.png").use {
+                android.graphics.BitmapFactory.decodeStream(it)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+    private val iconPaint = Paint().apply { isFilterBitmap = false } // keep pixel art crisp
+    private val iconDst = android.graphics.RectF()
+
     private fun isSlimeChunk(seed: Long, cx: Int, cz: Int): Boolean {
         var s = seed +
                 cx.toLong() * cx * 0x4c1906L + cx.toLong() * 0x5ac0dbL +
@@ -575,16 +590,22 @@ class MapView @JvmOverloads constructor(
                 val sz = ((f.z - top) * scale).toFloat()
                 if (sx < -30 || sz < -30 || sx > width + 30 || sz > height + 30) continue
                 val style = structureStyle[f.type] ?: continue
-                markerPaint.color = 0xD0101418.toInt()
-                canvas.drawRect(sx - 13f, sz - 13f, sx + 13f, sz + 13f, markerPaint)
-                markerPaint.color = style.second
-                markerPaint.style = Paint.Style.STROKE
-                markerPaint.strokeWidth = 2.5f
-                canvas.drawRect(sx - 13f, sz - 13f, sx + 13f, sz + 13f, markerPaint)
-                markerPaint.style = Paint.Style.FILL
-                textPaint.color = style.second
-                canvas.drawText(style.first, sx, sz + 8f, textPaint)
-                textPaint.color = Color.WHITE
+                val icon = structIcon(f.type)
+                if (icon != null) {
+                    iconDst.set(sx - 16f, sz - 16f, sx + 16f, sz + 16f)
+                    canvas.drawBitmap(icon, null, iconDst, iconPaint)
+                } else {
+                    markerPaint.color = 0xD0101418.toInt()
+                    canvas.drawRect(sx - 13f, sz - 13f, sx + 13f, sz + 13f, markerPaint)
+                    markerPaint.color = style.second
+                    markerPaint.style = Paint.Style.STROKE
+                    markerPaint.strokeWidth = 2.5f
+                    canvas.drawRect(sx - 13f, sz - 13f, sx + 13f, sz + 13f, markerPaint)
+                    markerPaint.style = Paint.Style.FILL
+                    textPaint.color = style.second
+                    canvas.drawText(style.first, sx, sz + 8f, textPaint)
+                    textPaint.color = Color.WHITE
+                }
             }
         }
 

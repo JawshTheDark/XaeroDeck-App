@@ -33,6 +33,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -772,23 +773,57 @@ class MainActivity : ComponentActivity() {
             "slime" to "SLIME CHUNKS",
             "fortress" to "FORTRESS", "bastion" to "BASTION", "ruined_portal_n" to "RUINED PORTAL (NETHER)",
             "end_city" to "END CITY", "gateway" to "END GATEWAY")
+        var enabled by remember { mutableStateOf(map.enabledTypes.toSet()) }
+        fun apply(newSet: Set<String>) {
+            enabled = newSet
+            map.enabledTypes = newSet.toMutableSet()
+            getSharedPreferences("deck", MODE_PRIVATE).edit()
+                .putStringSet("locTypes", newSet).apply()
+            map.invalidate()
+        }
+        val switchColors = SwitchDefaults.colors(
+            checkedThumbColor = Hud.accent, checkedTrackColor = Hud.surfaceHi,
+            uncheckedThumbColor = Hud.sub, uncheckedTrackColor = Hud.surface)
         HudDialog(mono, "LOC FILTERS", onClose, wide = true, fillHeight = true) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("ALL MARKERS", fontFamily = mono, fontSize = 13.sp,
+                    color = Hud.text, fontWeight = FontWeight.Bold)
+                Switch(checked = enabled.containsAll(order.map { it.first }),
+                    onCheckedChange = { v ->
+                        apply(if (v) order.map { it.first }.toSet() else emptySet())
+                    }, colors = switchColors)
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Hud.border))
             Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
                 for ((key, label) in order) {
-                    var on by remember(key) { mutableStateOf(map.enabledTypes.contains(key)) }
-                    val glyphColor = map.structureStyle[key]?.second ?: 0xFF44D044.toInt()
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(label, fontFamily = mono, fontSize = 13.sp, color = Color(glyphColor))
-                        Switch(checked = on, onCheckedChange = { v ->
-                            on = v
-                            if (v) map.enabledTypes.add(key) else map.enabledTypes.remove(key)
-                            getSharedPreferences("deck", MODE_PRIVATE).edit()
-                                .putStringSet("locTypes", map.enabledTypes.toSet()).apply()
-                            map.invalidate()
-                        }, colors = SwitchDefaults.colors(
-                            checkedThumbColor = Hud.accent, checkedTrackColor = Hud.surfaceHi,
-                            uncheckedThumbColor = Hud.sub, uncheckedTrackColor = Hud.surface))
+                    val style = map.structureStyle[key]
+                    val glyph = style?.first ?: "SC"
+                    val gc = Color(style?.second ?: 0xFF44D044.toInt())
+                    val icon = remember(key) { map.structIcon(key) }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        // legend chip: the exact sprite the map draws
+                        Box(Modifier.width(34.dp).height(34.dp),
+                            contentAlignment = Alignment.Center) {
+                            if (icon != null) {
+                                androidx.compose.foundation.Image(
+                                    bitmap = icon.asImageBitmap(),
+                                    contentDescription = label,
+                                    modifier = Modifier.width(32.dp).height(32.dp),
+                                    filterQuality = androidx.compose.ui.graphics.FilterQuality.None)
+                            } else {
+                                Text(glyph, fontFamily = mono, fontSize = 13.sp,
+                                    color = gc, fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.border(1.dp, gc).padding(4.dp))
+                            }
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(label, fontFamily = mono, fontSize = 13.sp, color = Color(
+                            style?.second ?: 0xFF44D044.toInt()),
+                            modifier = Modifier.weight(1f))
+                        Switch(checked = enabled.contains(key), onCheckedChange = { v ->
+                            apply(if (v) enabled + key else enabled - key)
+                        }, colors = switchColors)
                     }
                 }
             }
