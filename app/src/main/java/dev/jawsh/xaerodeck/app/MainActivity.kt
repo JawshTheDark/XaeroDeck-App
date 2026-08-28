@@ -1235,12 +1235,14 @@ class MainActivity : ComponentActivity() {
                 val p = st.player
                 Text("▚ ${st.worldId?.uppercase() ?: "?"} :: ${st.dimension?.substringAfter(':')?.uppercase() ?: "?"}",
                     fontFamily = mono, fontSize = 11.sp, color = Hud.accent)
-                Text("%.0f %.0f %.0f".format(p.x, p.y, p.z),
-                    fontFamily = mono, fontSize = 21.sp, color = Hud.text, fontWeight = FontWeight.Bold)
+                Text("%,.0f %,.0f %,.0f".format(p.x, p.y, p.z),
+                    fontFamily = mono, fontSize = 19.sp, color = Hud.green, fontWeight = FontWeight.Bold)
                 if (st.dimension == "minecraft:the_nether")
-                    Text("OW %.0f %.0f".format(p.x * 8, p.z * 8), fontFamily = mono, fontSize = 12.sp, color = Hud.green)
+                    Text("OW %,.0f %,.0f".format(p.x * 8, p.z * 8),
+                        fontFamily = mono, fontSize = 19.sp, color = Hud.text, fontWeight = FontWeight.Bold)
                 else if (st.dimension == "minecraft:overworld")
-                    Text("NETHER %.0f %.0f".format(p.x / 8, p.z / 8), fontFamily = mono, fontSize = 12.sp, color = Hud.green)
+                    Text("NETHER %,.0f %,.0f".format(p.x / 8, p.z / 8),
+                        fontFamily = mono, fontSize = 19.sp, color = Hud.text, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(10.dp))
                 st.stats?.let { s ->
                     StatLine(mono, "SPD", "%.0fbps".format(s.bps), "PING", "${s.ping}ms")
