@@ -11,10 +11,12 @@ shares nothing with XaeroDeck and can be moved to its own repo as-is).
 1. **Scan** — tap Scan, fill the frame with the case label, shoot. Any angle
    is fine: the app tries all four rotations and keeps the best reading.
    Poor light? Hit **LIGHT**. Already have photos? **PHOTOS** picks from the gallery.
-2. **Check** — the parsed fields appear next to the photo. The UPC is verified
-   against its check digit (✓ / ⚠), so an OCR misread is caught instead of
-   silently saved. Fix anything and hit **Save + next** to go straight to the
-   next box.
+2. **Check** — the parsed fields appear next to the photo. Case labels print
+   the UPC *without* its check digit (`UPC#89049700030`), so the app adds it
+   (→ `890497000306`, the code on the actual product) and shows the printed
+   digits so you can compare them with the photo. If a retail barcode is in
+   the shot it's read directly and wins. Fix anything and hit
+   **Save + next** to go straight to the next box.
 3. **Repository** — one entry per UPC with name, item #, size, category, dept,
    last slot, and how many cases you've seen. Scanning the same product again
    bumps its count; scanning the *same case* twice (same case barcode) warns you.
@@ -32,15 +34,19 @@ freezer with no signal.
 |---|---|---|
 | Name | `ACE BISTRO LOAF SOUR` | longest all-letters line |
 | Category | `DOUGH` | words before a size |
-| UPC | `890497000030` | `UPC#…`, check-digit verified; a retail barcode on the box wins |
+| UPC | `890497000306` | `UPC#89049700030` — labels omit the check digit, the app adds it; a retail barcode wins |
 | Item # | `870628` | `ITM…` |
 | Size | `21 OZ` | number + OZ/LB/CT/PK/… |
-| Dept | `BKY` | standalone 3-letter code |
+| Dept | `BKY`, `FROZ` | known dept codes, else a standalone 3–4 letter code |
+| PLU | `299` | `PLU #:` on store-printed labels |
 | Slot | `A-MF-36-06-004` | `X-XX-##-##-###` |
 | Case | `3 of 7` | `N of M` |
 | Door | `C8-30-S` | `X#-##-X` |
 | ASG # | `1029801153` | `ASG#…` |
 | Case ID | `1355470932` | the label's own barcode |
+
+Store-printed retail labels work too: the name is taken from the biggest
+type (so ingredient lists don't win), and the package barcode gives the UPC.
 
 OCR slips like `O`→`0`, `I`→`1`, `S`→`5` are corrected in numeric fields.
 "Show OCR text" on the check screen shows exactly what was recognised.

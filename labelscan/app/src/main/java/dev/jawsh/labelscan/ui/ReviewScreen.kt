@@ -41,6 +41,8 @@ import dev.jawsh.labelscan.data.Photos
 import dev.jawsh.labelscan.data.Product
 import dev.jawsh.labelscan.data.Receipt
 import dev.jawsh.labelscan.parse.Gtin
+import dev.jawsh.labelscan.parse.LabelData
+import dev.jawsh.labelscan.parse.UpcSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -59,7 +61,7 @@ fun ReviewScreen(vm: AppViewModel, review: Screen.Review, modifier: Modifier) {
         value = withContext(Dispatchers.IO) { vm.db.receiptByCaseId(label.caseId) }
     }
 
-    val upcOk = label.upc.length >= 8 && label.upc.all { it.isDigit() }
+    val upcOk = label.upc.length >= 6 && label.upc.all { it.isDigit() }
 
     Column(modifier.fillMaxSize()) {
         Bar(
@@ -94,16 +96,8 @@ fun ReviewScreen(vm: AppViewModel, review: Screen.Review, modifier: Modifier) {
                 textStyle = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Monospace),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
-                isError = label.upc.isNotEmpty() && !label.upcValid,
-                supportingText = {
-                    Text(
-                        when {
-                            label.upc.isEmpty() -> "Not found — type it in"
-                            label.upcValid -> "✓ Check digit OK"
-                            else -> "⚠ Check digit doesn't match — compare with the photo"
-                        }
-                    )
-                },
+                isError = label.upc.length > 11 && !label.upcValid,
+                supportingText = { Text(upcHint(label, edited = label.upc != review.label.upc)) },
             )
             Field("Name", label.name, placeholder = known?.name) { label = label.copy(name = it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -114,7 +108,10 @@ fun ReviewScreen(vm: AppViewModel, review: Screen.Review, modifier: Modifier) {
                 Field("Category", label.category, Modifier.weight(1f)) { label = label.copy(category = it) }
                 Field("Dept", label.dept, Modifier.weight(1f)) { label = label.copy(dept = it) }
             }
-            Field("Slot", label.slot) { label = label.copy(slot = it) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Field("Slot", label.slot, Modifier.weight(2f)) { label = label.copy(slot = it) }
+                Field("PLU", label.plu, Modifier.weight(1f), number = true) { label = label.copy(plu = it) }
+            }
 
             val extra = listOfNotNull(
                 label.caseNo?.let { "Case $it of ${label.caseTotal}" },
@@ -136,6 +133,19 @@ fun ReviewScreen(vm: AppViewModel, review: Screen.Review, modifier: Modifier) {
                 Text("Save + next")
             }
         }
+    }
+}
+
+private fun upcHint(label: LabelData, edited: Boolean): String = when {
+    label.upc.isEmpty() -> "Not found — type it in"
+    label.upc.length <= 11 -> "Check digit will be added on save"
+    edited -> if (label.upcValid) "✓ Check digit OK" else "⚠ Check digit doesn't match"
+    else -> when (label.upcSource) {
+        UpcSource.BARCODE -> "✓ Read from the barcode"
+        UpcSource.PRINTED_CHECKED -> "✓ Check digit OK"
+        UpcSource.PRINTED_COMPLETED ->
+            "Label prints ${label.upcPrinted} (no check digit) — compare those digits with the photo"
+        UpcSource.PRINTED_BAD, UpcSource.NONE -> "⚠ Check digit doesn't match — compare with the photo"
     }
 }
 

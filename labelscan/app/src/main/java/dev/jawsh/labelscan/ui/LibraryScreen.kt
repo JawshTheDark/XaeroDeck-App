@@ -132,6 +132,7 @@ private fun ProductRow(p: Product, onClick: () -> Unit) {
                 p.itemNo.takeIf { it.isNotEmpty() }?.let { "ITM $it" },
                 p.size.takeIf { it.isNotEmpty() },
                 p.dept.takeIf { it.isNotEmpty() },
+                p.plu.takeIf { it.isNotEmpty() }?.let { "PLU $it" },
                 p.lastSlot.takeIf { it.isNotEmpty() },
             ).joinToString(" · ")
             if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)

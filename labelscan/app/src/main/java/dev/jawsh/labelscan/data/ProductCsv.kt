@@ -8,7 +8,7 @@ import java.util.Locale
 /** Product list <-> CSV, for backups and for pasting into inventory spreadsheets. */
 object ProductCsv {
     private val HEADER = listOf(
-        "upc", "name", "category", "item_no", "size", "dept",
+        "upc", "name", "category", "item_no", "size", "dept", "plu",
         "last_slot", "notes", "times_seen", "first_seen", "last_seen",
     )
 
@@ -23,7 +23,7 @@ object ProductCsv {
                 append(
                     Csv.row(
                         listOf(
-                            p.upc, p.name, p.category, p.itemNo, p.size, p.dept, p.lastSlot,
+                            p.upc, p.name, p.category, p.itemNo, p.size, p.dept, p.plu, p.lastSlot,
                             p.notes, p.timesSeen.toString(), date(p.firstSeen), date(p.lastSeen),
                         )
                     )
@@ -53,6 +53,7 @@ object ProductCsv {
                 itemNo = col("item_no"),
                 size = col("size"),
                 dept = col("dept"),
+                plu = col("plu"),
                 lastSlot = col("last_slot"),
                 notes = col("notes"),
                 timesSeen = col("times_seen").toIntOrNull() ?: 0,

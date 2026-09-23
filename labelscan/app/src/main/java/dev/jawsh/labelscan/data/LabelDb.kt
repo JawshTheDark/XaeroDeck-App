@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import dev.jawsh.labelscan.parse.Gtin
 import dev.jawsh.labelscan.parse.LabelData
 
 /** One UPC in the repository — what inventory lookups are about. */
@@ -15,6 +16,7 @@ data class Product(
     val itemNo: String = "",
     val size: String = "",
     val dept: String = "",
+    val plu: String = "",
     val lastSlot: String = "",
     val notes: String = "",
     val timesSeen: Int = 0,
@@ -36,7 +38,7 @@ data class Receipt(
     val scannedAt: Long,
 )
 
-class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null, 1) {
+class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -47,6 +49,7 @@ class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null
                 item_no TEXT NOT NULL DEFAULT '',
                 size TEXT NOT NULL DEFAULT '',
                 dept TEXT NOT NULL DEFAULT '',
+                plu TEXT NOT NULL DEFAULT '',
                 last_slot TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
                 times_seen INTEGER NOT NULL DEFAULT 0,
@@ -71,7 +74,29 @@ class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null
         db.execSQL("CREATE INDEX receipt_case ON receipt(case_id)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE product ADD COLUMN plu TEXT NOT NULL DEFAULT ''")
+            completeCheckDigits(db)
+        }
+    }
+
+    /**
+     * 0.1.0 stored case-label UPCs as printed — 11 digits, no check digit.
+     * Give them their check digit so they match real barcodes.
+     */
+    private fun completeCheckDigits(db: SQLiteDatabase) {
+        val short = db.rawQuery("SELECT upc FROM product WHERE length(upc) = 11", null)
+            .use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        for (old in short) {
+            if (!old.all { it.isDigit() }) continue
+            val full = old + Gtin.checkDigit(old)
+            val taken = db.rawQuery("SELECT 1 FROM product WHERE upc = ?", arrayOf(full)).use { it.moveToFirst() }
+            if (taken) continue
+            db.execSQL("UPDATE product SET upc = ? WHERE upc = ?", arrayOf(full, old))
+            db.execSQL("UPDATE receipt SET upc = ? WHERE upc = ?", arrayOf(full, old))
+        }
+    }
 
     fun count(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM product", null)
         .use { it.moveToFirst(); it.getInt(0) }
@@ -79,7 +104,7 @@ class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null
     /** Every whitespace-separated term must match some field (name, UPC, item #, slot, ...). */
     fun search(query: String): List<Product> {
         val terms = query.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-        val fields = listOf("upc", "name", "category", "item_no", "size", "dept", "last_slot", "notes")
+        val fields = listOf("upc", "name", "category", "item_no", "size", "dept", "plu", "last_slot", "notes")
         val where = terms.joinToString(" AND ") { "(" + fields.joinToString(" OR ") { f -> "$f LIKE ?" } + ")" }
         val args = terms.flatMap { t -> List(fields.size) { "%$t%" } }.toTypedArray()
         val sql = "SELECT * FROM product" + (if (terms.isEmpty()) "" else " WHERE $where") +
@@ -115,6 +140,7 @@ class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null
                 itemNo = label.itemNo.ifBlank { old?.itemNo ?: "" },
                 size = label.size.ifBlank { old?.size ?: "" },
                 dept = label.dept.ifBlank { old?.dept ?: "" },
+                plu = label.plu.ifBlank { old?.plu ?: "" },
                 lastSlot = label.slot.ifBlank { old?.lastSlot ?: "" },
                 notes = old?.notes ?: "",
                 timesSeen = (old?.timesSeen ?: 0) + 1,
@@ -194,6 +220,7 @@ class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null
                     itemNo = p.itemNo.ifBlank { old.itemNo },
                     size = p.size.ifBlank { old.size },
                     dept = p.dept.ifBlank { old.dept },
+                    plu = p.plu.ifBlank { old.plu },
                     lastSlot = p.lastSlot.ifBlank { old.lastSlot },
                     notes = p.notes.ifBlank { old.notes },
                     timesSeen = maxOf(p.timesSeen, old.timesSeen),
@@ -216,6 +243,7 @@ class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null
         put("item_no", itemNo)
         put("size", size)
         put("dept", dept)
+        put("plu", plu)
         put("last_slot", lastSlot)
         put("notes", notes)
         put("times_seen", timesSeen)
@@ -235,6 +263,7 @@ class LabelDb(context: Context) : SQLiteOpenHelper(context, "labelscan.db", null
         itemNo = str("item_no"),
         size = str("size"),
         dept = str("dept"),
+        plu = str("plu"),
         lastSlot = str("last_slot"),
         notes = str("notes"),
         timesSeen = long("times_seen").toInt(),

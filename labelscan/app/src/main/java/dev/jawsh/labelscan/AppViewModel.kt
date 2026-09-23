@@ -15,6 +15,7 @@ import dev.jawsh.labelscan.data.LabelRecognizer
 import dev.jawsh.labelscan.data.Photos
 import dev.jawsh.labelscan.data.Product
 import dev.jawsh.labelscan.data.ProductCsv
+import dev.jawsh.labelscan.parse.Gtin
 import dev.jawsh.labelscan.parse.LabelData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -98,7 +99,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun save(label: LabelData, photo: String, scanNext: Boolean) {
+    fun save(edited: LabelData, photo: String, scanNext: Boolean) {
+        val label = edited.copy(upc = completeUpc(edited.upc))
         viewModelScope.launch {
             val known = withContext(Dispatchers.IO) {
                 val existed = db.product(label.upc) != null
@@ -111,6 +113,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** A typed-in UPC without its check digit (as case labels print it) gets one. */
+    private fun completeUpc(upc: String): String =
+        if (upc.length in 6..11) upc.padStart(11, '0').let { it + Gtin.checkDigit(it) } else upc
+
     fun discard(photo: String) {
         viewModelScope.launch(Dispatchers.IO) { File(photo).delete() }
         screen = Screen.Scan
@@ -118,8 +124,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun update(oldUpc: String, product: Product) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { db.updateProduct(oldUpc, product) }
-            screen = Screen.Detail(product.upc)
+            val fixed = product.copy(upc = completeUpc(product.upc))
+            withContext(Dispatchers.IO) { db.updateProduct(oldUpc, fixed) }
+            screen = Screen.Detail(fixed.upc)
             refresh()
         }
     }

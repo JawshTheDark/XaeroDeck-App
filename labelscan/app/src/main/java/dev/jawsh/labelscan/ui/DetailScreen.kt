@@ -96,6 +96,7 @@ fun DetailScreen(vm: AppViewModel, upc: String, modifier: Modifier) {
                 Info("Size", product.size)
                 Info("Category", product.category)
                 Info("Dept", product.dept)
+                Info("PLU", product.plu)
                 Info("Last slot", product.lastSlot)
                 Info("Notes", product.notes)
                 Info("Seen", "${product.timesSeen}× — first ${formatDate(product.firstSeen)}, last ${formatDate(product.lastSeen)}")
@@ -183,10 +184,11 @@ private fun Editor(p: Product, onCancel: () -> Unit, onSave: (Product) -> Unit) 
     Field("Size", e.size) { e = e.copy(size = it) }
     Field("Category", e.category) { e = e.copy(category = it) }
     Field("Dept", e.dept) { e = e.copy(dept = it) }
+    Field("PLU", e.plu, number = true) { e = e.copy(plu = it) }
     Field("Last slot", e.lastSlot) { e = e.copy(lastSlot = it) }
     OutlinedTextField(e.notes, { e = e.copy(notes = it) }, Modifier.fillMaxWidth(), label = { Text("Notes") })
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = onCancel, Modifier.weight(1f)) { Text("Cancel") }
-        Button(onClick = { onSave(e) }, Modifier.weight(1f), enabled = e.upc.length >= 8) { Text("Save") }
+        Button(onClick = { onSave(e) }, Modifier.weight(1f), enabled = e.upc.length >= 6) { Text("Save") }
     }
 }
