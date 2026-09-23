@@ -14,8 +14,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        // Phones only; the bundled ML Kit models otherwise ship for x86 too.
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        // 64-bit ARM phones only; the bundled ML Kit models otherwise ship per ABI.
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     buildTypes {
